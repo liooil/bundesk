@@ -166,7 +166,7 @@ export function validateFileAssociation(options: FileAssociationOptions): void {
   }
 }
 
-async function runRegistry(
+export async function runRegistry(
   args: string[],
   dryRun = false,
   allowMissing = false,

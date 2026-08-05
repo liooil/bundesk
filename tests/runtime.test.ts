@@ -8,9 +8,13 @@ import {
   findChromiumBrowser,
   githubReleaseProvider,
   getLinuxIntegrationStatus,
+  installService,
   launchAppWindow,
   registerLinuxIntegration,
   registerWindowsIntegration,
+  renderLaunchdPlist,
+  renderSystemdUnit,
+  renderTermuxBootScript,
   staticBinaryProvider,
   unregisterLinuxIntegration,
 } from '../src/index'
@@ -340,6 +344,62 @@ describe('actions: one functionality, cli + api + gui', () => {
     } finally {
       await session.stop()
     }
+  })
+})
+
+describe('service registration', () => {
+  it('renders a systemd user unit for the headless serve command', () => {
+    const unit = renderSystemdUnit('my-company.my-app', '/opt/my-app/bin/my-app')
+    expect(unit).toContain('[Install]')
+    expect(unit).toContain('WantedBy=default.target')
+    expect(unit).toContain('ExecStart="/opt/my-app/bin/my-app" serve --no-browser')
+    expect(unit).toContain('WorkingDirectory=/opt/my-app/bin')
+  })
+
+  it('renders a launchd plist with log paths', () => {
+    const plist = renderLaunchdPlist('my-company.my-app', '/Applications/My App.app/Contents/MacOS/My App', '/data/dir')
+    expect(plist).toContain('<key>Label</key><string>my-company.my-app</string>')
+    expect(plist).toContain('<string>serve</string>')
+    expect(plist).toContain('<string>--no-browser</string>')
+    expect(plist).toContain('<key>KeepAlive</key><true/>')
+    expect(plist).toContain(join('/data/dir', 'service.log'))
+  })
+
+  it('renders a termux boot script', () => {
+    const script = renderTermuxBootScript('/data/data/com.termux/files/usr/bin/my-app')
+    expect(script).toContain('#!/data/data/com.termux/files/usr/bin/sh')
+    expect(script).toContain('exec "/data/data/com.termux/files/usr/bin/my-app" serve --no-browser')
+  })
+
+  it('routes service commands without writing when dry-running', async () => {
+    const app = createDesktopApp({
+      id: `runtime-service-${process.pid}`,
+      server: { port: 0, fetch: () => new Response('must not start') },
+      window: false,
+      singleInstance: false,
+    })
+    const installed = await app.start(['install-service', '--dry-run'])
+    expect(installed.kind).toBe('command')
+    if (installed.kind === 'command') {
+      expect(installed.command).toBe('install-service')
+      const result = installed.result as { ok: boolean }
+      expect(result.ok).toBe(true)
+    }
+    const status = await app.start(['service-status'])
+    expect(status.kind).toBe('command')
+    if (status.kind === 'command') {
+      const result = status.result as { supported: boolean }
+      expect(result.supported).toBe(true)
+    }
+  })
+
+  it.skipIf(process.platform !== 'win32')('plans an HKCU Run key registration without writing it', async () => {
+    const result = await installService({
+      appId: 'bundesk-test',
+      executablePath: process.execPath,
+    }, { dryRun: true })
+    expect(result.ok).toBe(true)
+    expect(result.details.some((line) => line.includes('CurrentVersion\\Run'))).toBe(true)
   })
 })
 

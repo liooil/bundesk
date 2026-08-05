@@ -19,6 +19,7 @@ import {
   registerLinuxIntegration,
   unregisterLinuxIntegration,
 } from './linux-integration'
+import { getServiceStatus, installService, uninstallService } from './service-integration'
 import { isTermux } from './platform'
 import {
   getWindowsIntegrationStatus,
@@ -80,13 +81,17 @@ export interface DesktopAppSession<WebSocketData = undefined> extends DesktopApp
 export type DesktopAppStartResult<WebSocketData = undefined> =
   | DesktopAppSession<WebSocketData>
   | SingleInstanceResult & { kind: 'secondary' }
-  | { kind: 'command'; command: 'register' | 'unregister' | 'status' | 'upgrade'; result: unknown }
+  | {
+    kind: 'command'
+    command: 'register' | 'unregister' | 'status' | 'upgrade' | 'install-service' | 'uninstall-service' | 'service-status'
+    result: unknown
+  }
   | { kind: 'action'; action: string; result: unknown }
   | { kind: 'updated'; update: UpdateCheckResult }
 
 interface ParsedRuntimeArgs {
   appArgs: string[]
-  command?: 'serve' | 'register' | 'unregister' | 'status' | 'upgrade'
+  command?: 'serve' | 'register' | 'unregister' | 'status' | 'upgrade' | 'install-service' | 'uninstall-service' | 'service-status'
   browser: boolean
   host?: string
   port?: number
@@ -291,6 +296,17 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
     parsed: ParsedRuntimeArgs,
   ): Promise<DesktopAppStartResult<WebSocketData> | null> {
     if (!parsed.command || parsed.command === 'serve' || parsed.command === 'upgrade') return null
+
+    if (parsed.command === 'install-service' || parsed.command === 'uninstall-service' || parsed.command === 'service-status') {
+      const serviceOptions = { appId: this.options.id }
+      const result = parsed.command === 'install-service'
+        ? await installService(serviceOptions, { dryRun: parsed.dryRun })
+        : parsed.command === 'uninstall-service'
+          ? await uninstallService(serviceOptions, { dryRun: parsed.dryRun })
+          : await getServiceStatus(serviceOptions)
+      return { kind: 'command', command: parsed.command, result }
+    }
+
     const integration = this.options.desktopIntegration
     if (!integration) throw new Error(`${parsed.command} requires desktopIntegration configuration`)
 
@@ -374,7 +390,7 @@ function parseRuntimeArgs(args: string[]): ParsedRuntimeArgs {
   }
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!
-    if (index === 0 && ['serve', 'register', 'unregister', 'status', 'upgrade'].includes(arg)) {
+    if (index === 0 && ['serve', 'register', 'unregister', 'status', 'upgrade', 'install-service', 'uninstall-service', 'service-status'].includes(arg)) {
       parsed.command = arg as ParsedRuntimeArgs['command']
     } else if (arg === '--no-browser') {
       parsed.browser = false

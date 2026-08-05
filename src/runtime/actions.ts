@@ -44,7 +44,16 @@ export interface ActionRegistry {
   callFromCli(argv: string[]): Promise<{ name: string; result: unknown } | null>
 }
 
-export const frameworkCommandNames = ['serve', 'register', 'unregister', 'status', 'upgrade'] as const
+export const frameworkCommandNames = [
+  'serve',
+  'register',
+  'unregister',
+  'status',
+  'upgrade',
+  'install-service',
+  'uninstall-service',
+  'service-status',
+] as const
 
 export const actionsApiPath = '/api/actions'
 export const actionsConsolePath = '/__bundesk/actions'

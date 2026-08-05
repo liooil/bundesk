@@ -59,6 +59,7 @@ BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要
 - 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调，action 结果可回传；
 - 静态二进制 URL/ETag/SHA-256 和 GitHub Releases 两种升级 provider；
 - 下载校验、原子替换、失败回滚、重启和旧版本清理；
+- 服务注册（headless `serve` 常驻）：Windows HKCU Run key、Linux systemd user unit、macOS launchd LaunchAgent、Termux boot 脚本；
 - Windows 当前用户文件关联、默认打开方式和开始菜单快捷方式；
 - Linux XDG 文件关联、desktop entry 和 mimeapps 注册（register/unregister/status）；
 - macOS `.app` 打包：Info.plist、UTI/文档类型、URL scheme、图标与 ad-hoc codesign；
@@ -153,9 +154,12 @@ await app.run()
 my-app                         启动 server 和 App Mode 窗口
 my-app <file>                  启动或把文件参数转发给主实例
 my-app serve --no-browser      只启动 HTTP server
-my-app register [--default]    注册当前用户文件关联和开始菜单
+my-app register [--default]    注册当前用户文件关联和 launcher
 my-app unregister              取消注册
-my-app status                  查看 Windows 集成状态
+my-app status                  查看桌面集成状态
+my-app install-service         注册为开机自启服务（headless serve）
+my-app uninstall-service       移除服务注册
+my-app service-status          查看服务状态
 my-app upgrade [--force]       检查、安装升级并重启
 ```
 
@@ -280,6 +284,30 @@ BunDesk 检测到 Termux 环境（`$PREFIX` 指向 `com.termux` 数据目录）�
 
 注意：Bun 运行时需能在 Termux 中执行（glibc proot 环境，如 `proot-distro` 内的 Debian/Ubuntu），浏览器侧无额外要求。
 
+## 注册为服务
+
+因为 app 自带 API 层并能 `serve`，它可以作为常驻 headless 服务注册：开机/登录自动启动、不弹窗口、API 一直在线。GUI 交互通过单实例 IPC 转发到服务进程，由 `onSecondInstance` 决定 `launchWindow()` 连回同一 server。
+
+```bash
+my-app install-service        # 注册并立即启动
+my-app service-status         # 查看注册与运行状态
+my-app uninstall-service      # 停止并移除
+```
+
+| 平台 | 机制 | 说明 |
+| --- | --- | --- |
+| Windows | HKCU Run key | 登录自启，无需管理员；真正的 SCM 服务需要原生 `StartServiceCtrlDispatcher`，Bun 无法提供 |
+| Linux | systemd user unit | `~/.config/systemd/user/<appId>.service`，`systemctl --user enable --now`；无需 root |
+| macOS | launchd LaunchAgent | `~/Library/LaunchAgents/<appId>.plist`，`launchctl bootstrap gui/<uid>`；日志写入应用数据目录 |
+| Termux | termux-boot 脚本 | `~/.termux/boot/<appId>.sh`，由 Termux:Boot 在开机时执行 |
+
+约定：
+
+- 服务以 `"<exe>" serve --no-browser` 运行，注册时固化可执行文件路径；框架的原子自升级在同一路径替换文件，服务无需重新注册；
+- `service-status` 的 `active` 字段通过单实例记录（`instance.json` + PID 存活）判断，跨平台一致；
+- `install-service` / `uninstall-service` 支持 `--dry-run` 预览；
+- 服务使用 `WorkingDirectory`/`RunAtLoad`/`Restart=on-failure`/`KeepAlive` 保证崩溃拉起，应用内的相对路径应基于 `process.execPath` 解析而非 cwd。
+
 ## 自动升级
 
 ### 静态发布地址
@@ -384,6 +412,7 @@ https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 | 交叉构建 | 任意平台 → EXE | 任意平台 → 单文件 | Linux/macOS → `.app` | n/a |
 | 自动替换当前可执行文件 | 支持 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用 |
 | 文件关联 / launcher | 支持（HKCU） | 支持（XDG） | 构建期 Info.plist | 不支持 |
+| 服务注册（headless serve） | HKCU Run key | systemd user | launchd agent | termux-boot |
 
 Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`windows`/`runtime` 构建选项要求 `bun-windows-*` 目标，`macos` 选项要求 `bun-darwin-*` 目标且 `outfile` 以 `.app` 结尾。
 
