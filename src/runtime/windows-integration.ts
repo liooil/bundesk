@@ -55,7 +55,7 @@ export async function registerWindowsIntegration(
   const details: string[] = []
 
   for (const association of options.fileAssociations ?? []) {
-    validateAssociation(association)
+    validateFileAssociation(association)
     const extensionKey = `${classesRoot}\\${association.extension}`
     const progIdKey = `${classesRoot}\\${association.progId}`
     const icon = association.icon ? resolve(association.icon) : executablePath
@@ -90,7 +90,7 @@ export async function unregisterWindowsIntegration(
   const details: string[] = []
 
   for (const association of options.fileAssociations ?? []) {
-    validateAssociation(association)
+    validateFileAssociation(association)
     const extensionKey = `${classesRoot}\\${association.extension}`
     const currentDefault = await queryRegistryDefault(extensionKey)
     const commands = [
@@ -132,7 +132,7 @@ export async function getWindowsIntegrationStatus(
   }
 
   const fileAssociations = await Promise.all((options.fileAssociations ?? []).map(async (association) => {
-    validateAssociation(association)
+    validateFileAssociation(association)
     const extensionKey = `${classesRoot}\\${association.extension}`
     const openCommand = await queryRegistryDefault(`${classesRoot}\\${association.progId}\\shell\\open\\command`)
     const currentDefault = await queryRegistryDefault(extensionKey)
@@ -157,7 +157,7 @@ export async function getWindowsIntegrationStatus(
   }
 }
 
-function validateAssociation(options: FileAssociationOptions): void {
+export function validateFileAssociation(options: FileAssociationOptions): void {
   if (!/^\.[A-Za-z0-9][A-Za-z0-9._-]*$/.test(options.extension)) {
     throw new Error(`Invalid file extension: ${options.extension}`)
   }

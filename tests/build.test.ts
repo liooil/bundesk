@@ -100,6 +100,41 @@ describe('buildDesktopApp', () => {
     expect(stdout.trim()).toBe('desktop-fixture 1.2.3')
   }, 120_000)
 
+  it.skipIf(process.platform !== 'linux' && process.platform !== 'darwin')('cross-compiles a macOS .app bundle', async () => {
+    const outputDirectory = await mkdtemp(join(tmpdir(), 'bundesk-darwin-test-'))
+    temporaryDirectories.push(outputDirectory)
+    const bundlePath = join(outputDirectory, 'Fixture.app')
+
+    const output = await buildDesktopApp({
+      root: import.meta.dir,
+      entrypoint: 'fixtures/hello.ts',
+      outfile: bundlePath,
+      target: 'bun-darwin-arm64',
+      minify: true,
+      define: {
+        __FIXTURE_VERSION__: JSON.stringify('1.2.3'),
+      },
+      macos: {
+        bundleIdentifier: 'dev.bundesk.fixture',
+        displayName: 'BunDesk Fixture',
+        version: '1.2.3',
+        documentTypes: [{ extension: '.demo', name: 'BunDesk Document' }],
+        urlTypes: [{ scheme: 'bundesk-fixture' }],
+        codesign: false,
+      },
+    })
+
+    expect(output.outfile).toBe(bundlePath)
+    expect(output.bundle?.signed).toBe(false)
+    const executableBytes = new Uint8Array(await Bun.file(output.bundle!.executablePath).arrayBuffer())
+    expect([...executableBytes.slice(0, 4)]).toEqual([0xcf, 0xfa, 0xed, 0xfe])
+    const plist = await Bun.file(output.bundle!.infoPlistPath).text()
+    expect(plist).toContain('<key>CFBundleExecutable</key><string>Fixture</string>')
+    expect(plist).toContain('<key>CFBundleIdentifier</key><string>dev.bundesk.fixture</string>')
+    expect(plist).toContain('CFBundleDocumentTypes')
+    expect(plist).toContain('bundesk-fixture')
+  }, 240_000)
+
   it.skipIf(process.platform !== 'linux' || process.arch !== 'x64')('cross-compiles a detached-console Windows executable on Linux', async () => {
     const outputDirectory = await mkdtemp(join(tmpdir(), 'bundesk-cross-test-'))
     temporaryDirectories.push(outputDirectory)

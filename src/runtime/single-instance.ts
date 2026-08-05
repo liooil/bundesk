@@ -16,7 +16,7 @@ export interface AcquireSingleInstanceOptions {
   dataDirectory?: string
   argv?: string[]
   cwd?: string
-  onSecondInstance?: (event: SecondInstanceEvent) => void | Promise<void>
+  onSecondInstance?: (event: SecondInstanceEvent) => void | Promise<unknown>
   timeoutMs?: number
 }
 
@@ -30,6 +30,8 @@ export interface ForwardedInstance {
   kind: 'secondary'
   status: number
   accepted: boolean
+  /** JSON-serializable value returned by the primary's onSecondInstance handler. */
+  result?: unknown
 }
 
 export type SingleInstanceResult = PrimaryInstance | ForwardedInstance
@@ -109,7 +111,7 @@ async function startPrimaryInstance(options: {
   recordPath: string
   lockPath: string
   lock: FileHandle
-  onSecondInstance?: (event: SecondInstanceEvent) => void | Promise<void>
+  onSecondInstance?: (event: SecondInstanceEvent) => void | Promise<unknown>
 }): Promise<PrimaryInstance> {
   const token = randomBytes(32).toString('hex')
   const server = Bun.serve({
@@ -134,8 +136,8 @@ async function startPrimaryInstance(options: {
       }
 
       try {
-        await options.onSecondInstance?.(event)
-        return Response.json({ accepted: true })
+        const result = await options.onSecondInstance?.(event)
+        return Response.json(result === undefined ? { accepted: true } : { accepted: true, result })
       } catch (error) {
         console.error('[BunDesk] onSecondInstance failed:', error)
         return Response.json({ accepted: false }, { status: 500 })
@@ -205,11 +207,12 @@ async function forwardLaunch(record: InstanceRecord, event: SecondInstanceEvent)
       signal: AbortSignal.timeout(1_500),
     })
     if (response.status === 401 || response.status === 404) return null
-    const payload = await response.json().catch(() => null) as { accepted?: boolean } | null
+    const payload = await response.json().catch(() => null) as { accepted?: boolean; result?: unknown } | null
     return {
       kind: 'secondary',
       status: response.status,
       accepted: payload?.accepted === true,
+      result: 'result' in (payload ?? {}) ? payload?.result : undefined,
     }
   } catch {
     return null

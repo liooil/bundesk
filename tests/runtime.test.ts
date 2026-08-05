@@ -7,11 +7,14 @@ import {
   createUpdater,
   findChromiumBrowser,
   githubReleaseProvider,
+  getLinuxIntegrationStatus,
   launchAppWindow,
+  registerLinuxIntegration,
   registerWindowsIntegration,
   staticBinaryProvider,
+  unregisterLinuxIntegration,
 } from '../src/index'
-import type { DesktopAppSession, SecondInstanceEvent } from '../src/index'
+import type { DesktopAppOptions, DesktopAppSession, LinuxIntegrationOptions, SecondInstanceEvent } from '../src/index'
 
 const temporaryDirectories: string[] = []
 
@@ -197,7 +200,7 @@ describe('desktop runtime', () => {
       server: { port: 0, fetch: () => new Response('must not start') },
       window: false,
       singleInstance: false,
-      windowsIntegration: {
+      desktopIntegration: {
         fileAssociations: [{
           extension: '.bundesktest',
           progId: 'BunDesk.TestFile',
@@ -225,5 +228,163 @@ describe('desktop runtime', () => {
     expect(result.ok).toBe(true)
     expect(result.changed).toBe(true)
     expect(result.details.some((line) => line.includes('HKCU\\Software\\Classes'))).toBe(true)
+  })
+})
+
+function actionTestApp(overrides: Partial<DesktopAppOptions> = {}) {
+  return createDesktopApp({
+    id: `runtime-actions-${process.pid}`,
+    server: { port: 0, routes: { '/': new Response('ok') } },
+    window: false,
+    singleInstance: false,
+    actions: [{
+      name: 'greet',
+      description: 'Greet someone',
+      args: [
+        { name: 'name', type: 'string', required: true },
+        { name: 'count', type: 'number', default: 1 },
+      ],
+      handler(args) {
+        return { greeting: `hello ${args.name}`, count: args.count }
+      },
+    }],
+    ...overrides,
+  })
+}
+
+describe('actions: one functionality, cli + api + gui', () => {
+  it('exposes actions over the HTTP API and the generated GUI console', async () => {
+    const app = actionTestApp()
+    const session = await app.start([])
+    expect(session.kind).toBe('primary')
+    if (session.kind !== 'primary') throw new Error('Expected a primary session')
+    try {
+      const list = await fetch(new URL('/api/actions', session.url)).then((response) => response.json()) as Array<{ name: string; args: unknown[] }>
+      expect(list).toHaveLength(1)
+      expect(list[0]?.name).toBe('greet')
+
+      const executed = await fetch(new URL('/api/actions/greet', session.url), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'world', count: 2 }),
+      }).then((response) => response.json())
+      expect(executed).toEqual({ greeting: 'hello world', count: 2 })
+
+      const missing = await fetch(new URL('/api/actions/nope', session.url), { method: 'POST', body: '{}' })
+      expect(missing.status).toBe(404)
+
+      const invalid = await fetch(new URL('/api/actions/greet', session.url), { method: 'POST', body: '{}' })
+      expect(invalid.status).toBe(400)
+
+      const consolePage = await fetch(new URL('/__bundesk/actions', session.url))
+      expect(consolePage.status).toBe(200)
+      expect(await consolePage.text()).toContain('BunDesk Actions')
+    } finally {
+      await session.stop()
+    }
+  })
+
+  it('runs the same action from the CLI and exits', async () => {
+    const app = actionTestApp()
+    const result = await app.start(['greet', '--name', 'cli', '--count', '3'])
+    expect(result.kind).toBe('action')
+    if (result.kind === 'action') {
+      expect(result.action).toBe('greet')
+      expect(result.result).toEqual({ greeting: 'hello cli', count: 3 })
+    }
+  })
+
+  it('forwards a CLI action to the primary instance and returns the result', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'bundesk-action-forward-'))
+    temporaryDirectories.push(dataDirectory)
+    const options: DesktopAppOptions = {
+      id: `runtime-actions-forward-${process.pid}`,
+      server: { port: 0, fetch: () => new Response('unused') },
+      window: false,
+      singleInstance: { dataDirectory },
+      actions: [{
+        name: 'greet',
+        args: [{ name: 'name', type: 'string', required: true }],
+        handler(args) {
+          return { greeting: `hello ${args.name}` }
+        },
+      }],
+    }
+    const primaryApp = createDesktopApp(options)
+    const primary = await primaryApp.start([])
+    expect(primary.kind).toBe('primary')
+
+    const secondaryApp = createDesktopApp(options)
+    const secondary = await secondaryApp.start(['greet', '--name', 'forwarded'])
+    expect(secondary.kind).toBe('secondary')
+    if (secondary.kind === 'secondary') {
+      expect(secondary.accepted).toBe(true)
+      expect(secondary.result).toEqual({ greeting: 'hello forwarded' })
+    }
+    await (primary as DesktopAppSession).stop()
+  })
+
+  it('rejects unknown flags and missing required args from the CLI', async () => {
+    const app = actionTestApp()
+    await expect(app.start(['greet', '--bogus', 'x'])).rejects.toThrow('unknown flag')
+    await expect(app.start(['greet'])).rejects.toThrow('requires argument: name')
+  })
+
+  it('exposes actions on the app context', async () => {
+    const app = actionTestApp()
+    const session = await app.start([])
+    expect(session.kind).toBe('primary')
+    if (session.kind !== 'primary') throw new Error('Expected a primary session')
+    try {
+      expect(await session.actions.call('greet', { name: 'ctx' })).toEqual({ greeting: 'hello ctx', count: 1 })
+    } finally {
+      await session.stop()
+    }
+  })
+})
+
+describe('linux desktop integration', () => {
+  it.skipIf(process.platform !== 'linux')('registers, reports, and unregisters XDG file associations', async () => {
+    const dataHome = await mkdtemp(join(tmpdir(), 'bundesk-xdg-data-'))
+    const configHome = await mkdtemp(join(tmpdir(), 'bundesk-xdg-config-'))
+    temporaryDirectories.push(dataHome, configHome)
+    const previousData = process.env.XDG_DATA_HOME
+    const previousConfig = process.env.XDG_CONFIG_HOME
+    process.env.XDG_DATA_HOME = dataHome
+    process.env.XDG_CONFIG_HOME = configHome
+    try {
+      const options: LinuxIntegrationOptions = {
+        appId: `bundesk-test-${process.pid}`,
+        executablePath: process.execPath,
+        fileAssociations: [{
+          extension: '.bundesktest',
+          progId: 'BunDesk.TestFile',
+          description: 'BunDesk test file',
+        }],
+        startMenuShortcut: { name: 'BunDesk Test' },
+      }
+      const registered = await registerLinuxIntegration(options, { makeDefault: true })
+      expect(registered.ok).toBe(true)
+
+      const status = await getLinuxIntegrationStatus(options)
+      expect(status.supported).toBe(true)
+      expect(status.fileAssociations[0]).toMatchObject({
+        extension: '.bundesktest',
+        registered: true,
+        defaultForCurrentUser: true,
+      })
+      expect(status.startMenuShortcut.exists).toBe(true)
+
+      const unregistered = await unregisterLinuxIntegration(options)
+      expect(unregistered.ok).toBe(true)
+      const after = await getLinuxIntegrationStatus(options)
+      expect(after.fileAssociations[0]?.registered).toBe(false)
+      expect(after.startMenuShortcut.exists).toBe(false)
+    } finally {
+      if (previousData === undefined) delete process.env.XDG_DATA_HOME
+      else process.env.XDG_DATA_HOME = previousData
+      if (previousConfig === undefined) delete process.env.XDG_CONFIG_HOME
+      else process.env.XDG_CONFIG_HOME = previousConfig
+    }
   })
 })

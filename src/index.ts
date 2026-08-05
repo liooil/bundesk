@@ -4,6 +4,12 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import { BlobReader, BlobWriter, ZipReader } from '@zip.js/zip.js'
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom'
 import { Data, NtExecutable, NtExecutableResource, Resource } from 'resedit'
+import {
+  createMacosAppBundle,
+  macosBundleLayout,
+  type DesktopMacosOptions,
+  type MacosAppBundleResult,
+} from './darwin-bundle'
 
 export type WindowsConsoleMode = 'detached' | 'hidden' | 'inherit'
 
@@ -46,6 +52,7 @@ export type DesktopAppConfig = Omit<
   compile?: DesktopCompileOptions
   windows?: DesktopWindowsOptions
   runtime?: WindowsRuntimeOptions
+  macos?: DesktopMacosOptions
 }
 
 export interface DesktopBuildResult {
@@ -53,6 +60,8 @@ export interface DesktopBuildResult {
   outfile: string
   size: number
   sha256: string
+  /** Present when the target is `bun-darwin-*` and outfile ends in `.app`. */
+  bundle?: MacosAppBundleResult
 }
 
 export class DesktopBuildError extends Error {
@@ -73,8 +82,15 @@ export async function buildDesktopApp(config: DesktopAppConfig): Promise<Desktop
   const root = resolve(config.root ?? process.cwd())
   const target = config.target ?? 'bun-windows-x64'
   const isWindowsTarget = target.startsWith('bun-windows-')
+  const isDarwinTarget = target.startsWith('bun-darwin-')
   if (!isWindowsTarget && (config.windows || config.runtime)) {
     throw new Error('windows and runtime options require a bun-windows-* target')
+  }
+  if (config.macos && !isDarwinTarget) {
+    throw new Error('macos options require a bun-darwin-* target')
+  }
+  if (isDarwinTarget && config.macos && !config.outfile.toLowerCase().endsWith('.app')) {
+    throw new Error('macos options require an outfile ending in .app')
   }
 
   const entrypoint = resolveFrom(root, config.entrypoint)
@@ -82,7 +98,11 @@ export async function buildDesktopApp(config: DesktopAppConfig): Promise<Desktop
   const outfile = isWindowsTarget && !requestedOutput.toLowerCase().endsWith('.exe')
     ? `${requestedOutput}.exe`
     : requestedOutput
-  await mkdir(dirname(outfile), { recursive: true })
+  const darwinLayout = isDarwinTarget && outfile.toLowerCase().endsWith('.app')
+    ? macosBundleLayout(outfile)
+    : null
+  const compileOutfile = darwinLayout?.executablePath ?? outfile
+  await mkdir(dirname(compileOutfile), { recursive: true })
 
   const {
     root: _root,
@@ -92,6 +112,7 @@ export async function buildDesktopApp(config: DesktopAppConfig): Promise<Desktop
     compile: compileOptions,
     windows: windowsOptions,
     runtime: runtimeOptions,
+    macos: macosOptions,
     ...buildOptions
   } = config
 
@@ -100,7 +121,7 @@ export async function buildDesktopApp(config: DesktopAppConfig): Promise<Desktop
     autoloadDotenv: false,
     ...compileOptions,
     target,
-    outfile,
+    outfile: compileOutfile,
   }
 
   let temporaryDirectory: string | undefined
@@ -135,14 +156,26 @@ export async function buildDesktopApp(config: DesktopAppConfig): Promise<Desktop
     })
     if (!result.success) throw new DesktopBuildError(result.logs)
 
-    const output = Bun.file(outfile)
-    if (!(await output.exists())) throw new Error(`Bun reported success but did not create ${outfile}`)
+    const output = Bun.file(compileOutfile)
+    if (!(await output.exists())) throw new Error(`Bun reported success but did not create ${compileOutfile}`)
     const bytes = await output.arrayBuffer()
+
+    let bundle: MacosAppBundleResult | undefined
+    if (darwinLayout) {
+      bundle = await createMacosAppBundle({
+        bundlePath: darwinLayout.bundlePath,
+        executablePath: darwinLayout.executablePath,
+        executableName: darwinLayout.executableName,
+        macos: macosOptions ?? {},
+        version: macosOptions?.version ?? '1.0.0',
+      })
+    }
     return {
       result,
       outfile,
       size: bytes.byteLength,
       sha256: digest(bytes),
+      bundle,
     }
   } finally {
     if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true })
@@ -356,9 +389,18 @@ function digest(bytes: ArrayBuffer): string {
   return hasher.digest('hex')
 }
 
+export * from './runtime/actions'
 export * from './runtime/app'
 export * from './runtime/browser'
+export * from './runtime/linux-integration'
 export * from './runtime/paths'
+export * from './runtime/platform'
 export * from './runtime/single-instance'
 export * from './runtime/updater'
 export * from './runtime/windows-integration'
+export type {
+  DesktopMacosOptions,
+  MacosAppBundleResult,
+  MacosDocumentTypeOptions,
+  MacosUrlTypeOptions,
+} from './darwin-bundle'

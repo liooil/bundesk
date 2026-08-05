@@ -101,7 +101,7 @@ Rust `target`、Next/Vite/Svelte 缓存和 Electron/Tauri 输出目录的清理�
 - 是否携带 Chromium/WebView/runtime/sidecar；
 - 用户数据目录不计入发布物，但单独注明首次运行产生的数据。
 
-Electron 的 NSIS/MSI 安装器即使表面是一个文件，也必须测量安装后的 Electron/Chromium、`app.asar`、DLL、locale 和 resources 目录。BunDesk 只有在 runtime、server 和前端资源均嵌入 executable、运行时不依赖同目录 sidecar 时才标记为单 binary。系统已有的 Edge/Chrome/Chromium 不计入 BunDesk 发布体积，但必须作为运行前置条件披露。
+Electron 的 NSIS/MSI 安装器即使表面是一个文件，也必须测量安装后的 Electron/Chromium、`app.asar`、DLL、locale 和 resources 目录。BunDesk 只有在 runtime、server 和前端资源均嵌入 executable、运行时不依赖同目录 sidecar 时才标记为单 binary。macOS 交付物是 `.app` bundle（Contents/MacOS 单可执行文件 + Info.plist + 可选 Resources/icns），按 bundle 布局测量并单列，不与 Windows/Linux 单 binary 混在一个数字里。系统已有的 Edge/Chrome/Chromium 不计入 BunDesk 发布体积，但必须作为运行前置条件披露。
 
 ### 运行时
 
@@ -116,7 +116,7 @@ Electron 的 NSIS/MSI 安装器即使表面是一个文件，也必须测量安�
 
 ## 公平性约束
 
-- Windows x64 是第一主平台；Linux 原生构建和 Linux → Windows x64 交叉构建单列，不与 Windows 本机构建混在一个数字里。
+- Windows x64 是第一主平台；Linux 原生构建、Linux → Windows x64 交叉构建和 macOS `.app`（含跨平台交叉构建）单列，不与 Windows 本机构建混在一个数字里。
 - 固定 Bun、Node、Rust、Electron、Tauri 和包管理器版本。
 - 使用 release 模式、相同 renderer 资源和等价 minify/source-map 配置。
 - code signing、notarization、上传和网络下载不计入核心 build time；若原脚本无法拆分则额外报告总流水线时间。

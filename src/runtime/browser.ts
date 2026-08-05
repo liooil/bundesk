@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { getAppDataDirectory } from './paths'
+import { isTermux } from './platform'
 
 export type BrowserPreference = 'edge' | 'chrome' | string
 
@@ -41,6 +42,16 @@ const linuxChromeCandidates = [
   '/usr/bin/chromium-browser',
 ]
 
+const macosEdgeCandidates = [
+  '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge',
+]
+
+const macosChromeCandidates = [
+  '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+  '/Applications/Brave Browser.app/Contents/MacOS/Brave Browser',
+  '/Applications/Chromium.app/Contents/MacOS/Chromium',
+]
+
 export async function findChromiumBrowser(options: FindBrowserOptions = {}): Promise<string | null> {
   if (options.candidates) {
     for (const candidate of options.candidates) {
@@ -53,8 +64,18 @@ export async function findChromiumBrowser(options: FindBrowserOptions = {}): Pro
     return await Bun.file(preferred).exists() ? preferred : null
   }
 
-  const edge = process.platform === 'win32' ? windowsEdgeCandidates() : linuxEdgeCandidates
-  const chrome = process.platform === 'win32' ? windowsChromeCandidates() : linuxChromeCandidates
+  let edge: string[]
+  let chrome: string[]
+  if (process.platform === 'win32') {
+    edge = windowsEdgeCandidates()
+    chrome = windowsChromeCandidates()
+  } else if (process.platform === 'darwin') {
+    edge = macosEdgeCandidates
+    chrome = macosChromeCandidates
+  } else {
+    edge = linuxEdgeCandidates
+    chrome = linuxChromeCandidates
+  }
   const candidates = preferred === 'chrome' ? [...chrome, ...edge] : [...edge, ...chrome]
   for (const candidate of candidates) {
     if (candidate && await Bun.file(candidate).exists()) return candidate
@@ -62,7 +83,30 @@ export async function findChromiumBrowser(options: FindBrowserOptions = {}): Pro
   return null
 }
 
+const termuxUrlLaunchers = [
+  ['am', 'start', '-a', 'android.intent.action.VIEW', '-d'],
+  ['/system/bin/am', 'start', '-a', 'android.intent.action.VIEW', '-d'],
+  ['termux-open-url'],
+]
+
+/**
+ * Termux has no Chromium CLI with App Mode. The window is an Android VIEW
+ * intent: the OS opens the URL in the default (or chosen) browser.
+ */
+async function launchTermuxWindow(url: string): Promise<Bun.Subprocess | null> {
+  for (const launcher of termuxUrlLaunchers) {
+    if (await Bun.file(launcher[0]!).exists()) {
+      return Bun.spawn([...launcher, url], {
+        stdio: ['ignore', 'ignore', 'ignore'],
+      })
+    }
+  }
+  return null
+}
+
 export async function launchAppWindow(options: AppWindowOptions): Promise<Bun.Subprocess | null> {
+  if (isTermux()) return launchTermuxWindow(String(options.url))
+
   const browser = await findChromiumBrowser(options)
   if (!browser) return null
 

@@ -52,15 +52,18 @@ BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要
 ## 核心功能
 
 - `createDesktopApp(...)` 一体化托管 server、窗口和生命周期；
+- **cli + api + gui 三层**：action 注册一次，自动获得 `my-app <name>` CLI、`POST /api/actions/<name>` API 和 `/__bundesk/actions` 控制台页；
 - `launchAppWindow(...)` 等组合式底层 API；
-- Edge/Chrome/Chromium `--app=<url>` 独立窗口；
+- Edge/Chrome/Chromium `--app=<url>` 独立窗口（macOS 含 Brave），Termux 走 Android VIEW intent；
 - 带随机 256-bit token 的 loopback IPC 单实例；
-- 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调；
+- 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调，action 结果可回传；
 - 静态二进制 URL/ETag/SHA-256 和 GitHub Releases 两种升级 provider；
 - 下载校验、原子替换、失败回滚、重启和旧版本清理；
 - Windows 当前用户文件关联、默认打开方式和开始菜单快捷方式；
+- Linux XDG 文件关联、desktop entry 和 mimeapps 注册（register/unregister/status）；
+- macOS `.app` 打包：Info.plist、UTI/文档类型、URL scheme、图标与 ad-hoc codesign；
 - Windows `detached` / `hidden` / `inherit` 三种控制台策略；
-- Linux 交叉构建 Windows x64、baseline x64 和 ARM64；
+- Linux 交叉构建 Windows x64、baseline x64 和 ARM64，以及 macOS x64/ARM64 `.app`；
 - 构建结果大小与 SHA-256 输出。
 
 ## 安装
@@ -122,12 +125,13 @@ const app = createDesktopApp({
       assetName: {
         'windows-x64': 'my-app.exe',
         'linux-x64': 'my-app',
+        'darwin-arm64': 'My App.app.zip',
       },
     }),
     checkOnStartup: false,
   },
 
-  windowsIntegration: {
+  desktopIntegration: {
     fileAssociations: [{
       extension: '.demo',
       progId: 'MyCompany.MyApp.Document',
@@ -173,6 +177,108 @@ import {
 ```
 
 这些模块与 `createDesktopApp` 使用同一实现，不存在第二套行为。
+
+## cli + api + gui 三层
+
+BunDesk 的核心理念之一：**一个 app 由 cli、api、gui 三层构成，同一功能可以在三层都有**。注册一次 action，框架自动把它暴露到三层，handler 只在应用进程里跑一次：
+
+| 层 | 入口 |
+| --- | --- |
+| CLI | `my-app <name> --arg value ...` |
+| API | `POST /api/actions/<name>`，JSON body 传命名参数；`GET /api/actions` 返回 schema |
+| GUI | `/__bundesk/actions` 生成的控制台页，按 schema 渲染表单并调用同一 API |
+
+```ts
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  server: { port: 0, routes: { '/': new Response('Hello') } },
+  actions: [{
+    name: 'export',
+    description: 'Export the current document',
+    args: [
+      { name: 'format', type: 'string', default: 'json' },
+      { name: 'pretty', type: 'boolean', default: true },
+    ],
+    async handler(args, context) {
+      // 同一实现：CLI、API、GUI 都走到这里
+      return { exported: true, format: args.format, pretty: args.pretty }
+    },
+  }],
+})
+```
+
+三种调用等价：
+
+```bash
+my-app export --format csv --pretty=false
+curl -X POST http://127.0.0.1:PORT/api/actions/export \
+  -H 'content-type: application/json' -d '{"format":"csv","pretty":false}'
+# 浏览器打开 http://127.0.0.1:PORT/__bundesk/actions
+```
+
+行为约定：
+
+- CLI 调用 `my-app <action>` 时，首个参数匹配注册的 action 名即进入 action 模式，之后的 `--flag value` 全部作为 action 参数（框架命令如 `serve`/`register` 优先）。
+- 单实例运行中时，CLI action 通过 loopback IPC 转发给主实例执行，**结果 JSON 原样回传**打印；未运行时则就地启动、执行、退出。
+- action 结果必须是 JSON 可序列化的（IPC 与 API 都走 JSON）。
+- handler 收到完整 `context`（server、url、window、updater、actions、launchWindow、stop），action 也可以调用 `context.actions.call(...)` 组合其他 action。
+- `server` 配置使用 `routes` 时，框架自动合并 `/api/actions`、`/api/actions/:name`、`/__bundesk/actions` 三个保留路径；使用 `fetch` 兜底且没有 `routes` 时不会自动挂载，但 `context.actions` 与 CLI 层不受影响。actions API 默认随 server 绑定（默认 127.0.0.1），请勿在无鉴权时把 hostname 暴露到 0.0.0.0。
+- action 名必须是 kebab-case，且不能与框架命令（`serve`、`register`、`unregister`、`status`、`upgrade`）重名。
+
+## 平台集成
+
+### Linux：XDG 文件关联与 launcher
+
+`register` / `unregister` / `status` 在 Linux 上写入 XDG 标准位置，全部为当前用户级：
+
+- MIME 包：`~/.local/share/mime/packages/<appId>.xml`（扩展名 → `application/x-<progId>`），随后尽力刷新 `update-mime-database`；
+- desktop entry：`~/.local/share/applications/<appId>.desktop`（`Exec="<exe>" %F`、`MimeType=`）；
+- 默认关联：`~/.config/mimeapps.list` 的 `[Added Associations]`（`--default` 时写入 `[Default Applications]`）。
+
+```bash
+my-app register [--default]
+my-app unregister
+my-app status
+```
+
+没有 `update-mime-database` 时注册仍然成功，只是 MIME 缓存不刷新。
+
+### macOS：构建期 `.app` 打包
+
+macOS 没有运行期注册：文件关联、URL scheme 和图标在构建时写进 bundle 的 `Info.plist`，`register`/`status` 命令返回明确的 unsupported 说明。
+
+```ts
+export default defineConfig({
+  entrypoint: 'server/main.ts',
+  outfile: 'dist/My App.app',
+  target: 'bun-darwin-arm64',
+  macos: {
+    bundleIdentifier: 'com.mycompany.myapp',
+    displayName: 'My App',
+    version: '1.2.3',
+    icon: 'src/app/AppIcon.icns',
+    documentTypes: [{ extension: '.demo', name: 'My App Document' }],
+    urlTypes: [{ scheme: 'myapp' }],
+    background: false,
+    codesign: false, // 默认在 macOS 主机上做 ad-hoc 签名；false 跳过
+  },
+})
+```
+
+- `outfile` 以 `.app` 结尾时生成 bundle：`Contents/MacOS/<name>` 为可执行文件，`Contents/Info.plist` 含 `CFBundleDocumentTypes`、`UTExportedTypeDeclarations`（自动导出 UTI）和 `CFBundleURLTypes`。
+- 非 `.app` 的 darwin `outfile` 保持单文件 Mach-O 形态。
+- 在 macOS 主机上默认执行 `codesign --force --deep -s -`（ad-hoc）；交叉构建产物不会签名，分发前必须在 Mac 上签名并公证（`codesign` + `notarytool`）。
+- Linux CI 同样可以交叉构建 macOS x64/ARM64 `.app`（Bun 下载同版本 darwin runtime）。
+
+### Termux（Android）
+
+BunDesk 检测到 Termux 环境（`$PREFIX` 指向 `com.termux` 数据目录）时：
+
+- 窗口不再是 Chromium `--app`，而是 Android VIEW intent（`am start` 或 `termux-open-url`），由系统浏览器打开 URL；
+- 应用生命周期、单实例、HTTP server、自动升级与普通平台一致；
+- `exitWithWindow` 在 Termux 下不生效（intent 立即返回）。
+
+注意：Bun 运行时需能在 Termux 中执行（glibc proot 环境，如 `proot-distro` 内的 Debian/Ubuntu），浏览器侧无额外要求。
 
 ## 自动升级
 
@@ -269,22 +375,34 @@ https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 
 ## 平台范围
 
-| 功能 | Windows | Linux |
-| --- | --- | --- |
-| HTTP server / 生命周期 | 支持 | 支持 |
-| Edge/Chrome/Chromium App Mode | 支持 | 支持 |
-| 安全单实例与参数转发 | 支持 | 支持 |
-| 单文件构建 | 支持 | 支持 |
-| Linux 构建 Windows EXE | 支持 | 支持 |
-| 自动替换当前可执行文件 | 支持 | 底层 API 可用，0.1 不作桌面发布承诺 |
-| 文件关联 / 开始菜单 | 支持（HKCU） | 0.1 不支持 |
+| 功能 | Windows | Linux | macOS | Termux (Android) |
+| --- | --- | --- | --- | --- |
+| HTTP server / 生命周期 | 支持 | 支持 | 支持 | 支持 |
+| Chromium App Mode 窗口 | 支持 | 支持 | 支持（含 Brave） | VIEW intent |
+| 安全单实例与参数转发 | 支持 | 支持 | 支持 | 支持 |
+| 单文件构建 / `.app` bundle | 单文件 EXE | 单文件 | `.app` bundle | n/a |
+| 交叉构建 | 任意平台 → EXE | 任意平台 → 单文件 | Linux/macOS → `.app` | n/a |
+| 自动替换当前可执行文件 | 支持 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用 |
+| 文件关联 / launcher | 支持（HKCU） | 支持（XDG） | 构建期 Info.plist | 不支持 |
+
+Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`windows`/`runtime` 构建选项要求 `bun-windows-*` 目标，`macos` 选项要求 `bun-darwin-*` 目标且 `outfile` 以 `.app` 结尾。
 
 ## Roadmap
 
 完整方案见 [应用迁移与性能基准计划](docs/migration-benchmark-plan.md)。当前只完成选型和实验设计，尚未开始迁移或采集性能数据。
 
+已完成（本轮）：
+
+- macOS 运行时支持（浏览器候选、数据目录、darwin 升级 asset）与 `.app` bundle 构建（Info.plist、UTI/文档类型、URL scheme、图标、ad-hoc codesign）；
+- Linux XDG 文件关联、desktop entry、mimeapps 注册（`register`/`unregister`/`status`）；
+- Termux（Android）检测与 VIEW intent 窗口；
+- **cli + api + gui 三层 action 注册表**（CLI 转发结果回传、`/api/actions`、`/__bundesk/actions` 控制台页）。
+
+待评估：
+
 - 第一轮：draw.io Desktop（Electron）、NextChat（Tauri）、NeoHtop（Tauri），覆盖 static-heavy、web-first 和 native-backend 三类应用；
 - 第二轮：MarkText（Electron）、Yaak（Tauri），扩大文件系统、编辑器、数据库、网络、插件和 secret/keychain 的兼容性边界；
+- macOS 签名/公证流水线在真实 Mac CI 上的落地；
 - **Hermes Agent + Poly**：评估以 [Poly](https://github.com/liooil/poly) 在同一进程中承载 Bun 与 RustPython，将 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的 Python agent/runtime 与 BunDesk 桌面壳整合；
 - **Oh My Pi + Poly**：评估将 [Oh My Pi](https://github.com/can1357/oh-my-pi) 的 Bun/TypeScript 主体直接接入 BunDesk，并通过 Poly 承载 Python 工具内核。
 
@@ -297,7 +415,7 @@ bun test
 bun run pack:check
 ```
 
-测试覆盖：真实 Windows/Linux 单文件构建与执行、Windows PE metadata/manifest、真实 Chromium App Mode 进程、安全单实例转发、HTTP server 生命周期、静态升级安装、GitHub release provider，以及 Windows 注册表 dry-run。
+测试覆盖：真实 Windows/Linux 单文件构建与执行、macOS `.app` 交叉构建结构（Mach-O、Info.plist）、Windows PE metadata/manifest、真实 Chromium App Mode 进程、安全单实例转发、action 三层的 API/CLI/转发结果回传、Linux XDG 注册往返、静态升级安装、GitHub release provider，以及 Windows 注册表 dry-run。
 
 ## License
 

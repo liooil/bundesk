@@ -33,7 +33,10 @@ export interface StaticBinaryProviderOptions {
 export interface GitHubReleaseProviderOptions {
   owner: string
   repository: string
-  assetName: string | Partial<Record<'windows-x64' | 'windows-arm64' | 'linux-x64' | 'linux-arm64', string>>
+  assetName: string | Partial<Record<
+    'windows-x64' | 'windows-arm64' | 'linux-x64' | 'linux-arm64' | 'darwin-x64' | 'darwin-arm64',
+    string
+  >>
   token?: string
   apiUrl?: string
   includePrerelease?: boolean
