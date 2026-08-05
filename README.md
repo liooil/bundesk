@@ -11,6 +11,11 @@ BunDesk 是一个面向 Bun 的桌面应用框架，而不只是 EXE 打包脚�
 BunDesk 的正式构建是一次 `Bun.build({ compile })`：TypeScript、server、浏览器资源和 Bun runtime 直接生成单文件可执行程序。它不需要编译 Rust/C++ 桌面壳，也不复制一套 Chromium，因此避免了 Tauri 原生依赖编译和 Electron renderer/runtime 打包中最重的步骤。
 
 实际耗时仍取决于应用规模、插件和网络缓存；建议在具体项目中记录 CI 基线。BunDesk 的框架测试会真实构建并运行 Windows/Linux 可执行文件，而不是只测试配置对象。
+### 交付物是单个 binary
+
+BunDesk 将 Bun runtime、server 和由入口导入的前端资源编进同一个平台可执行文件；发布时只需复制这一个 binary。Electron 即使提供单文件安装器，安装后通常仍会展开为包含 Electron/Chromium、`app.asar`、DLL、locale 和 resources 的应用目录。BunDesk 不携带浏览器目录，应用数据则按运行时约定保存在当前用户数据目录，不与发布物混放。
+
+实际项目基准会同时记录发布文件数、解包/安装后总大小和压缩下载大小，避免只比较安装器表面的单文件形式。
 
 ### 调试直接
 
@@ -273,6 +278,15 @@ https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 | Linux 构建 Windows EXE | 支持 | 支持 |
 | 自动替换当前可执行文件 | 支持 | 底层 API 可用，0.1 不作桌面发布承诺 |
 | 文件关联 / 开始菜单 | 支持（HKCU） | 0.1 不支持 |
+
+## Roadmap
+
+完整方案见 [应用迁移与性能基准计划](docs/migration-benchmark-plan.md)。当前只完成选型和实验设计，尚未开始迁移或采集性能数据。
+
+- 第一轮：draw.io Desktop（Electron）、NextChat（Tauri）、NeoHtop（Tauri），覆盖 static-heavy、web-first 和 native-backend 三类应用；
+- 第二轮：MarkText（Electron）、Yaak（Tauri），扩大文件系统、编辑器、数据库、网络、插件和 secret/keychain 的兼容性边界；
+- **Hermes Agent + Poly**：评估以 [Poly](https://github.com/liooil/poly) 在同一进程中承载 Bun 与 RustPython，将 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的 Python agent/runtime 与 BunDesk 桌面壳整合；
+- **Oh My Pi + Poly**：评估将 [Oh My Pi](https://github.com/can1357/oh-my-pi) 的 Bun/TypeScript 主体直接接入 BunDesk，并通过 Poly 承载 Python 工具内核。
 
 ## 开发与验证
 
