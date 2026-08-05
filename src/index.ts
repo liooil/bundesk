@@ -121,7 +121,7 @@ export async function buildDesktopApp(config: DesktopAppConfig): Promise<Desktop
           console: consoleMode,
           icon: windows.icon ? resolveFrom(root, windows.icon) : undefined,
         }, outfile)
-        temporaryDirectory = await mkdtemp(join(tmpdir(), 'bun-desktop-app-'))
+        temporaryDirectory = await mkdtemp(join(tmpdir(), 'bundesk-'))
         const patchedRuntimePath = join(temporaryDirectory, 'bun.exe')
         await Bun.write(patchedRuntimePath, patchedBytes)
         compile.executablePath = patchedRuntimePath
@@ -231,9 +231,9 @@ function windowsRuntimeAsset(target: Bun.Build.CompileTarget): string {
 
 function defaultCacheDirectory(): string {
   if (process.platform === 'win32') {
-    return join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'bun-desktop-app', 'runtimes')
+    return join(process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local'), 'BunDesk', 'runtimes')
   }
-  return join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'bun-desktop-app', 'runtimes')
+  return join(process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache'), 'bundesk', 'runtimes')
 }
 
 async function verifyRuntime(file: Blob, expected: string | undefined): Promise<void> {
@@ -355,3 +355,10 @@ function digest(bytes: ArrayBuffer): string {
   hasher.update(bytes)
   return hasher.digest('hex')
 }
+
+export * from './runtime/app'
+export * from './runtime/browser'
+export * from './runtime/paths'
+export * from './runtime/single-instance'
+export * from './runtime/updater'
+export * from './runtime/windows-integration'

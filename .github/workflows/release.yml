@@ -19,11 +19,11 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: mkdir artifacts
-      - run: bun pm pack --filename artifacts/bun-desktop-app.tgz
-      - run: sha256sum artifacts/bun-desktop-app.tgz > artifacts/SHA256SUMS.txt
+      - run: bun pm pack --filename artifacts/bundesk.tgz
+      - run: sha256sum artifacts/bundesk.tgz > artifacts/SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
           files: |
-            artifacts/bun-desktop-app.tgz
+            artifacts/bundesk.tgz
             artifacts/SHA256SUMS.txt

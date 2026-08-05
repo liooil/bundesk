@@ -10,5 +10,5 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src", "tests", "desktop-app.config.ts"]
+  "include": ["src", "tests", "bundesk.config.ts"]
 }

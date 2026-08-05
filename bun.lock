@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "bun-desktop-app",
+      "name": "bundesk",
       "dependencies": {
         "@xmldom/xmldom": "^0.8.12",
         "@zip.js/zip.js": "^2.8.26",

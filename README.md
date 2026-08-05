@@ -1,40 +1,216 @@
-# bun-desktop-app
+# BunDesk
 
-把 Bun 本地 Web 应用打成单文件桌面可执行程序。它封装 `Bun.build({ compile })`，并补上跨平台构建 Windows EXE 时最容易重复、出错的部分：图标、版本资源、可复现的 Bun runtime 下载，以及浏览器 App Mode 应用需要的控制台策略。
+**用 Bun 和系统 Chromium，把本地 Web 应用变成启动快、构建快、容易调试的桌面应用。**
 
-这个包只负责**构建**。HTTP server、Edge/Chrome `--app=<url>` 启动、单实例、自动升级和文件关联属于应用运行时，不在包内；不同应用对这些行为的要求差异很大，不应被打包器绑定。
+BunDesk 是一个面向 Bun 的桌面应用框架，而不只是 EXE 打包脚本。名称由 **Bun + Desktop** 组成。框架统一处理 HTTP server、Edge/Chrome App Mode 窗口、单实例、自动升级、Windows 文件关联与开始菜单集成，同时保留底层组合式 API。
 
-## 设计边界
+## 为什么是 BunDesk
 
-这个包专注于可复用的构建链路：
+### 构建很快
 
-1. 保留应用自己的 Bun 插件、`define`、HTML/Worker 资源和 server entrypoint；
-2. 统一 Bun 单文件编译、Windows runtime 获取、PE 资源修改、失败处理和 SHA-256 输出；
-3. 默认下载与当前 Bun **同版本**的 GitHub Release，而不是不稳定的 `latest`；
-4. 默认采用 `detached` 控制台策略：从资源管理器双击时不弹黑框，从已有终端启动时仍可输出日志。
+BunDesk 的正式构建是一次 `Bun.build({ compile })`：TypeScript、server、浏览器资源和 Bun runtime 直接生成单文件可执行程序。它不需要编译 Rust/C++ 桌面壳，也不复制一套 Chromium，因此避免了 Tauri 原生依赖编译和 Electron renderer/runtime 打包中最重的步骤。
+
+实际耗时仍取决于应用规模、插件和网络缓存；建议在具体项目中记录 CI 基线。BunDesk 的框架测试会真实构建并运行 Windows/Linux 可执行文件，而不是只测试配置对象。
+
+### 调试直接
+
+开发时应用就是普通 Bun HTTP server 和普通网页：
+
+- server 代码直接由 Bun 运行，可使用现有 TypeScript 调试方式；
+- UI 使用 Edge/Chrome DevTools，不经过自定义 WebView 调试桥；
+- `--no-browser` 可只启动 server，再用任意浏览器或 API 客户端调试；
+- 应用 routes、Bun 插件、Vite/Tailwind 和 Worker 构建逻辑都留在应用仓库中。
+
+### 支持交叉构建
+
+可以在 Linux CI 上生成 Windows x64/ARM64 单文件 EXE。BunDesk 下载与构建 Bun **同版本**的 Windows runtime，先跨平台写入图标、版本资源和 manifest，再通过 `executablePath` 完成 Bun 编译。Windows 构建机不是必需条件。
+
+> 当前产物是可直接分发的单文件 EXE。MSI、MSIX 或安装向导不是 0.1 版的产物格式。
+
+### 不附带 Chromium
+
+运行时使用系统已经安装的 Microsoft Edge、Google Chrome 或 Chromium，并以 `--app=<url>` 打开独立应用窗口。代价是目标机器必须有兼容浏览器；收益是更小的发布物、更少的 renderer 更新负担和更短的打包链路。
+
+## 与 Electron / Tauri 的定位
+
+| | BunDesk | Electron | Tauri |
+| --- | --- | --- | --- |
+| 应用后端 | Bun | Node.js | Rust + 可选 sidecar |
+| Renderer | 系统 Edge/Chrome/Chromium | 随应用附带 Chromium | 系统 WebView |
+| 正式构建主链路 | Bun bundle + compile | JS bundle + Electron packaging | 前端构建 + Rust/native compile |
+| Linux 构建 Windows 单文件 EXE | 支持 | 依赖目标打包配置 | 通常需要额外交叉工具链 |
+| 调试 | Bun + 浏览器 DevTools | Electron DevTools | WebView DevTools + Rust 调试 |
+| 原生能力 | Bun/Node API + Windows 集成模块 | Electron API | Tauri 插件/Rust |
+
+BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要深度原生 UI、系统级沙箱或随应用固定 Chromium 版本时，应选择更匹配的方案。
+
+## 核心功能
+
+- `createDesktopApp(...)` 一体化托管 server、窗口和生命周期；
+- `launchAppWindow(...)` 等组合式底层 API；
+- Edge/Chrome/Chromium `--app=<url>` 独立窗口；
+- 带随机 256-bit token 的 loopback IPC 单实例；
+- 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调；
+- 静态二进制 URL/ETag/SHA-256 和 GitHub Releases 两种升级 provider；
+- 下载校验、原子替换、失败回滚、重启和旧版本清理；
+- Windows 当前用户文件关联、默认打开方式和开始菜单快捷方式；
+- Windows `detached` / `hidden` / `inherit` 三种控制台策略；
+- Linux 交叉构建 Windows x64、baseline x64 和 ARM64；
+- 构建结果大小与 SHA-256 输出。
 
 ## 安装
 
-当前从 GitHub 安装：
-
 ```bash
-bun add -d github:liooil/bun-desktop-app
+bun add -d github:liooil/bundesk
 ```
 
-包名 `bun-desktop-app` 已为以后发布 npm 保留同一使用方式：
+包名 `bundesk` 可直接用于 Bun：
 
-```bash
-bun add -d bun-desktop-app
+```ts
+import { createDesktopApp, defineConfig } from 'bundesk'
 ```
 
 要求 Bun 1.3.14 或更新版本。
 
-## 配置
+## 运行时快速开始
 
-在项目根目录创建 `desktop-app.config.ts`：
+应用 entrypoint：
 
 ```ts
-import { defineConfig } from 'bun-desktop-app'
+import {
+  createDesktopApp,
+  githubReleaseProvider,
+} from 'bundesk'
+
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  version: '1.2.3',
+
+  server: {
+    hostname: '127.0.0.1',
+    port: 0,
+    routes: {
+      '/': new Response('<h1>My App</h1>', {
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      }),
+      '/api/health': Response.json({ ok: true }),
+    },
+  },
+
+  window: {
+    path: '/',
+    preferred: 'edge',
+    exitWithWindow: true,
+  },
+
+  singleInstance: {},
+  async onSecondInstance(event, context) {
+    console.log('Second launch:', event.argv, event.cwd)
+    await context.launchWindow()
+  },
+
+  updates: {
+    currentVersion: '1.2.3',
+    provider: githubReleaseProvider({
+      owner: 'OWNER',
+      repository: 'REPOSITORY',
+      assetName: {
+        'windows-x64': 'my-app.exe',
+        'linux-x64': 'my-app',
+      },
+    }),
+    checkOnStartup: false,
+  },
+
+  windowsIntegration: {
+    fileAssociations: [{
+      extension: '.demo',
+      progId: 'MyCompany.MyApp.Document',
+      description: 'My App Document',
+    }],
+    startMenuShortcut: {
+      name: 'My App',
+      description: 'Open My App',
+    },
+  },
+})
+
+await app.run()
+```
+
+框架保留以下应用命令：
+
+```text
+my-app                         启动 server 和 App Mode 窗口
+my-app <file>                  启动或把文件参数转发给主实例
+my-app serve --no-browser      只启动 HTTP server
+my-app register [--default]    注册当前用户文件关联和开始菜单
+my-app unregister              取消注册
+my-app status                  查看 Windows 集成状态
+my-app upgrade [--force]       检查、安装升级并重启
+```
+
+`register` 只写 `HKCU`，不要求管理员权限。`--default` 写当前用户的扩展名默认 ProgID，但不会绕过 Windows 的 `UserChoice` 保护。
+
+## 组合式 API
+
+不使用一体化入口时，可以单独组合：
+
+```ts
+import {
+  acquireSingleInstance,
+  createUpdater,
+  findChromiumBrowser,
+  launchAppWindow,
+  registerWindowsIntegration,
+  staticBinaryProvider,
+} from 'bundesk'
+```
+
+这些模块与 `createDesktopApp` 使用同一实现，不存在第二套行为。
+
+## 自动升级
+
+### 静态发布地址
+
+适合对象存储、CDN 或普通 HTTP server：
+
+```ts
+import { staticBinaryProvider } from 'bundesk'
+
+const provider = staticBinaryProvider({
+  binaryUrl: 'https://downloads.example/my-app.exe',
+  changelogUrl: 'https://downloads.example/CHANGELOG.txt',
+  version: '1.2.4',
+})
+```
+
+provider 使用 `HEAD` 的 ETag 检查当前文件；支持 SHA-256 ETag、普通 MD5 和兼容 16 MiB 分片的对象存储 ETag。下载阶段还会校验 Content-Length、`X-Checksum-SHA256` / `Digest`、可选 descriptor SHA-256，以及 Windows EXE 的 `MZ` 文件头。
+
+### GitHub Releases
+
+```ts
+import { githubReleaseProvider } from 'bundesk'
+
+const provider = githubReleaseProvider({
+  owner: 'OWNER',
+  repository: 'REPOSITORY',
+  assetName: 'my-app.exe',
+})
+```
+
+provider 比较当前版本与 release tag，选择指定 asset，并使用 GitHub asset digest（存在时）校验下载。
+
+## 单实例安全模型
+
+BunDesk 不把实例转发接口暴露在应用 routes 中。框架单独启动只绑定 `127.0.0.1` 的 IPC HTTP server，并为每次主实例生成 256-bit 随机 token。token 只写入当前用户应用数据目录的权限受限文件；次实例必须携带 Bearer token 才能转发参数。崩溃留下的 lock/record 会在确认原 PID 已退出后清理。
+
+## 构建配置
+
+在项目根目录创建 `bundesk.config.ts`：
+
+```ts
+import { defineConfig } from 'bundesk'
 
 export default defineConfig({
   entrypoint: 'server/main.ts',
@@ -56,140 +232,49 @@ export default defineConfig({
 })
 ```
 
-运行：
+构建：
 
 ```bash
-bunx bun-desktop-app
+bunx bundesk
+bunx bundesk --config build/bundesk.config.ts
+bunx bundesk --target bun-windows-x64-baseline
 ```
 
-也可以显式指定配置和覆盖 target：
-
-```bash
-bunx bun-desktop-app --config build/desktop.config.ts
-bunx bun-desktop-app --target bun-windows-x64-baseline
-```
-
-配置文件可以导出数组，一次生成多个平台产物：
-
-```ts
-import { defineConfig } from 'bun-desktop-app'
-
-const shared = {
-  entrypoint: 'server/main.ts',
-  minify: true,
-  compile: {
-    autoloadBunfig: false,
-    autoloadDotenv: false,
-  },
-}
-
-export default defineConfig([
-  {
-    ...shared,
-    outfile: 'dist/my-app.exe',
-    target: 'bun-windows-x64',
-    windows: {
-      console: 'detached',
-      icon: 'favicon.ico',
-      title: 'My App',
-      version: '1.2.3',
-    },
-  },
-  {
-    ...shared,
-    outfile: 'dist/my-app',
-    target: 'bun-linux-x64',
-  },
-])
-```
-
-### 使用项目自己的 Bun 插件
-
-插件保持在应用仓库中，通过标准 `plugins` 传入。例如 React/Tailwind 或 Worker URL 处理：
-
-```ts
-import tailwindPlugin from 'bun-plugin-tailwind'
-import { defineConfig } from 'bun-desktop-app'
-import { browserWorkerUrlPlugin } from './scripts/browser-worker-url-plugin'
-
-export default defineConfig({
-  entrypoint: 'server/main.ts',
-  outfile: 'dist/my-app.exe',
-  plugins: [tailwindPlugin, browserWorkerUrlPlugin()],
-  define: {
-    __BROWSER_WORKER_MANIFEST__: JSON.stringify(await buildWorkerManifest()),
-  },
-  windows: {
-    icon: 'favicon.ico',
-    title: 'My App',
-    version: '1.2.3',
-  },
-})
-```
-
-## API
-
-也可直接从构建脚本调用：
-
-```ts
-import { buildDesktopApp } from 'bun-desktop-app'
-
-const output = await buildDesktopApp({
-  entrypoint: 'server/main.ts',
-  outfile: 'dist/my-app.exe',
-  windows: {
-    title: 'My App',
-    version: '1.2.3',
-  },
-})
-
-console.log(output.outfile, output.size, output.sha256)
-```
-
-构建失败会抛出 `DesktopBuildError`，不会像旧脚本一样只打印错误后以成功状态结束。
+配置文件可以导出数组，一次生成多个平台产物。应用自己的 Tailwind/Vite/Worker 插件直接通过标准 `plugins` 传入，BunDesk 不复制应用构建逻辑。
 
 ## Windows 控制台模式
 
-| `windows.console` | 行为 | 适用场景 |
+| `windows.console` | 行为 | 场景 |
 | --- | --- | --- |
-| `detached`（默认） | 双击不分配控制台；从终端启动时继承终端 | 同时提供 GUI 和 CLI 的工具 |
-| `hidden` | 使用 Bun 的 `hideConsole`，始终按 GUI 程序运行 | 纯 GUI 应用 |
-| `inherit` | 保留 Bun 默认控制台行为 | CLI 或需要固定控制台窗口的程序 |
+| `detached`（默认） | 双击不分配控制台；终端启动时继承现有终端 | 同时提供 GUI 和 CLI |
+| `hidden` | 使用 Bun `hideConsole`，按 GUI 程序运行 | 纯 GUI |
+| `inherit` | 保留 Bun 默认控制台行为 | CLI 优先 |
 
-`detached` 通过 Windows 11 `consoleAllocationPolicy` manifest 实现。包先修改干净的 `bun.exe`，再把它传给 Bun 的 `executablePath`；不能在编译完成后重写 EXE，否则可能破坏 Bun 追加在 PE 文件后的应用 payload。
+`detached` 通过 Windows `consoleAllocationPolicy` manifest 实现。BunDesk 先修改干净的 `bun.exe` 再编译，避免在 Bun payload 已追加后重写 PE 文件。
 
-## Runtime 下载与自定义镜像
+## 交叉构建 runtime
 
-Windows 本机、架构一致且目标为标准 target 时，默认直接复用当前 `bun.exe`。交叉编译或 baseline/ARM64 构建会下载：
+Windows 本机且架构一致时，默认复用当前 `bun.exe`。Linux 交叉构建或 baseline/ARM64 构建会下载：
 
 ```text
 https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 ```
 
-可显式覆盖，适合自定义镜像或固定校验：
+可通过 `runtime.downloadUrl` 使用自定义镜像，通过 `runtime.sha256` 固定解压后 `bun.exe` 的校验值。
 
-```ts
-runtime: {
-  version: '1.3.14',
-  downloadUrl: 'https://mirror.example/bun-windows-x64.zip',
-  sha256: '<extracted-bun.exe-sha256>',
-  cacheDir: '.cache/bun-desktop-app',
-}
-```
+## 平台范围
 
-`sha256` 校验的是 ZIP 中解出的 `bun.exe`，不是 ZIP 文件。
+| 功能 | Windows | Linux |
+| --- | --- | --- |
+| HTTP server / 生命周期 | 支持 | 支持 |
+| Edge/Chrome/Chromium App Mode | 支持 | 支持 |
+| 安全单实例与参数转发 | 支持 | 支持 |
+| 单文件构建 | 支持 | 支持 |
+| Linux 构建 Windows EXE | 支持 | 支持 |
+| 自动替换当前可执行文件 | 支持 | 底层 API 可用，0.1 不作桌面发布承诺 |
+| 文件关联 / 开始菜单 | 支持（HKCU） | 0.1 不支持 |
 
-## 迁移现有构建脚本
-
-现有应用通常只需：
-
-1. 安装此包；
-2. 把原构建脚本中的项目参数移到 `desktop-app.config.ts`；
-3. 保留项目特有的插件和构建前资源生成；
-4. 将 `build:win` 改为 `bun-desktop-app`；
-5. 删除仅供旧打包脚本使用的 PE、ZIP 和 XML 处理依赖。
-
-## 开发
+## 开发与验证
 
 ```bash
 bun install
@@ -198,7 +283,7 @@ bun test
 bun run pack:check
 ```
 
-Windows 集成测试会真实生成并运行一个 EXE，然后读取其 manifest 和版本资源；非 Windows 环境跳过该平台测试。
+测试覆盖：真实 Windows/Linux 单文件构建与执行、Windows PE metadata/manifest、真实 Chromium App Mode 进程、安全单实例转发、HTTP server 生命周期、静态升级安装、GitHub release provider，以及 Windows 注册表 dry-run。
 
 ## License
 

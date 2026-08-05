@@ -9,7 +9,7 @@ import type { DesktopAppConfig } from './index'
 const args = parseArgs({
   args: Bun.argv.slice(2),
   options: {
-    config: { type: 'string', short: 'c', default: 'desktop-app.config.ts' },
+    config: { type: 'string', short: 'c', default: 'bundesk.config.ts' },
     target: { type: 'string', short: 't' },
     help: { type: 'boolean', short: 'h', default: false },
   },
@@ -18,10 +18,10 @@ const args = parseArgs({
 })
 
 if (args.values.help) {
-  console.log(`bun-desktop-app
+  console.log(`BunDesk
 
 Usage:
-  bun-desktop-app [--config desktop-app.config.ts] [--target bun-windows-x64]
+  bundesk [--config bundesk.config.ts] [--target bun-windows-x64]
 
 Options:
   -c, --config <path>  Config module exporting one config or an array

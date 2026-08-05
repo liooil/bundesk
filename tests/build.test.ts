@@ -12,7 +12,7 @@ afterAll(async () => {
 
 describe('buildDesktopApp', () => {
   it.skipIf(process.platform !== 'win32')('builds a runnable detached-console Windows executable with metadata', async () => {
-    const outputDirectory = await mkdtemp(join(tmpdir(), 'bun-desktop-app-test-'))
+    const outputDirectory = await mkdtemp(join(tmpdir(), 'bundesk-test-'))
     temporaryDirectories.push(outputDirectory)
     const outfile = join(outputDirectory, 'fixture.exe')
 
@@ -26,10 +26,10 @@ describe('buildDesktopApp', () => {
       },
       windows: {
         console: 'detached',
-        title: 'Desktop Fixture',
+        title: 'BunDesk Fixture',
         version: '1.2.3',
-        description: 'bun-desktop-app integration fixture',
-        publisher: 'bun-desktop-app',
+        description: 'BunDesk integration fixture',
+        publisher: 'BunDesk',
       },
       runtime: {
         executablePath: process.execPath,
@@ -71,11 +71,11 @@ describe('buildDesktopApp', () => {
     ])
     expect(versionExitCode).toBe(0)
     expect(versionStderr).toBe('')
-    expect(versionStdout.trim()).toBe('Desktop Fixture|1.2.3')
+    expect(versionStdout.trim()).toBe('BunDesk Fixture|1.2.3')
   }, 120_000)
 
   it.skipIf(process.platform !== 'linux')('builds a runnable Linux executable', async () => {
-    const outputDirectory = await mkdtemp(join(tmpdir(), 'bun-desktop-app-test-'))
+    const outputDirectory = await mkdtemp(join(tmpdir(), 'bundesk-test-'))
     temporaryDirectories.push(outputDirectory)
     const outfile = join(outputDirectory, 'fixture')
 
@@ -99,4 +99,30 @@ describe('buildDesktopApp', () => {
     expect(stderr).toBe('')
     expect(stdout.trim()).toBe('desktop-fixture 1.2.3')
   }, 120_000)
+
+  it.skipIf(process.platform !== 'linux' || process.arch !== 'x64')('cross-compiles a detached-console Windows executable on Linux', async () => {
+    const outputDirectory = await mkdtemp(join(tmpdir(), 'bundesk-cross-test-'))
+    temporaryDirectories.push(outputDirectory)
+    const output = await buildDesktopApp({
+      root: import.meta.dir,
+      entrypoint: 'fixtures/hello.ts',
+      outfile: join(outputDirectory, 'fixture.exe'),
+      target: 'bun-windows-x64',
+      minify: true,
+      define: {
+        __FIXTURE_VERSION__: JSON.stringify('1.2.3'),
+      },
+      windows: {
+        console: 'detached',
+        title: 'BunDesk Cross Fixture',
+        version: '1.2.3',
+      },
+      runtime: {
+        cacheDir: join(outputDirectory, 'runtime-cache'),
+      },
+    })
+    const bytes = new Uint8Array(await Bun.file(output.outfile).arrayBuffer())
+    expect([...bytes.slice(0, 2)]).toEqual([0x4d, 0x5a])
+    expect(new TextDecoder().decode(bytes)).toContain('consoleAllocationPolicy')
+  }, 180_000)
 })

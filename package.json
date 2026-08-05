@@ -1,10 +1,10 @@
 {
-  "name": "bun-desktop-app",
+  "name": "bundesk",
   "version": "0.1.0",
-  "description": "Build Bun-powered local web apps as desktop executables with reproducible Windows metadata and console behavior.",
+  "description": "Fast Bun framework for building, running, integrating, and updating local web apps as desktop applications.",
   "type": "module",
   "bin": {
-    "bun-desktop-app": "./src/cli.ts"
+    "bundesk": "./src/cli.ts"
   },
   "exports": {
     ".": "./src/index.ts"
@@ -21,12 +21,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/liooil/bun-desktop-app.git"
+    "url": "git+https://github.com/liooil/bundesk.git"
   },
   "bugs": {
-    "url": "https://github.com/liooil/bun-desktop-app/issues"
+    "url": "https://github.com/liooil/bundesk/issues"
   },
-  "homepage": "https://github.com/liooil/bun-desktop-app#readme",
+  "homepage": "https://github.com/liooil/bundesk#readme",
   "keywords": [
     "bun",
     "desktop",
