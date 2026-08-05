@@ -1,91 +1,93 @@
 # BunDesk
 
-**用 Bun 和系统 Chromium，把本地 Web 应用变成启动快、构建快、容易调试的桌面应用。**
+> [中文](README.zh-CN.md) · **English**
 
-BunDesk 是一个面向 Bun 的桌面应用框架，而不只是 EXE 打包脚本。名称由 **Bun + Desktop** 组成。框架统一处理 HTTP server、Edge/Chrome App Mode 窗口、单实例、自动升级、Windows 文件关联与开始菜单集成，同时保留底层组合式 API。
+**Turn local web apps into desktop applications that start fast, build fast and are easy to debug — with Bun and the system Chromium.**
 
-## 为什么是 BunDesk
+BunDesk is a desktop application framework for Bun — not just an EXE packaging script. The name is **Bun + Desktop**. The framework handles the HTTP server, Edge/Chrome App Mode windows, single instance, automatic updates, Windows file associations and Start Menu integration as one unit, while keeping the low-level composable API available.
 
-### 构建很快
+## Why BunDesk
 
-BunDesk 的正式构建是一次 `Bun.build({ compile })`：TypeScript、server、浏览器资源和 Bun runtime 直接生成单文件可执行程序。它不需要编译 Rust/C++ 桌面壳，也不复制一套 Chromium，因此避免了 Tauri 原生依赖编译和 Electron renderer/runtime 打包中最重的步骤。
+### Fast builds
 
-实际耗时仍取决于应用规模、插件和网络缓存；建议在具体项目中记录 CI 基线。BunDesk 的框架测试会真实构建并运行 Windows/Linux 可执行文件，而不是只测试配置对象。
-### 交付物是单个 binary
+A BunDesk release build is a single `Bun.build({ compile })`: TypeScript, the server, browser assets and the Bun runtime are compiled straight into a single-file executable. There is no Rust/C++ desktop shell to compile and no Chromium to bundle, which skips the heaviest steps of Tauri's native dependency builds and Electron's renderer/runtime packaging.
 
-BunDesk 将 Bun runtime、server 和由入口导入的前端资源编进同一个平台可执行文件；发布时只需复制这一个 binary。Electron 即使提供单文件安装器，安装后通常仍会展开为包含 Electron/Chromium、`app.asar`、DLL、locale 和 resources 的应用目录。BunDesk 不携带浏览器目录，应用数据则按运行时约定保存在当前用户数据目录，不与发布物混放。
+Actual build time still depends on application size, plugins and network cache; record a CI baseline in your specific project. BunDesk's framework tests actually build and run Windows/Linux executables rather than only testing configuration objects.
+### The deliverable is a single binary
 
-实际项目基准会同时记录发布文件数、解包/安装后总大小和压缩下载大小，避免只比较安装器表面的单文件形式。
+BunDesk compiles the Bun runtime, the server and the frontend assets imported by the entrypoint into a single platform executable; releasing means copying just that one binary. Even when Electron provides a single-file installer, it usually expands after installation into an app directory containing Electron/Chromium, `app.asar`, DLLs, locale and resources. BunDesk carries no browser directory, and app data is stored in the current user's data directory per the runtime convention, never mixed into the release.
 
-### 调试直接
+Real-project benchmarks record the number of release files, the total size after unpacking/installing, and the compressed download size, so the comparison is not based only on the installer's single-file appearance.
 
-开发时应用就是普通 Bun HTTP server 和普通网页：
+### Direct debugging
 
-- server 代码直接由 Bun 运行，可使用现有 TypeScript 调试方式；
-- UI 使用 Edge/Chrome DevTools，不经过自定义 WebView 调试桥；
-- `--no-browser` 可只启动 server，再用任意浏览器或 API 客户端调试；
-- 应用 routes、Bun 插件、Vite/Tailwind 和 Worker 构建逻辑都留在应用仓库中。
+In development the app is an ordinary Bun HTTP server and an ordinary web page:
 
-### 支持交叉构建
+- server code runs directly under Bun, so existing TypeScript debugging techniques work;
+- the UI is debugged with Edge/Chrome DevTools, no custom WebView debugging bridge;
+- `--no-browser` starts only the server, so you can debug with any browser or API client;
+- app routes, Bun plugins, and Vite/Tailwind and Worker build logic all stay in the app repository.
 
-可以在 Linux CI 上生成 Windows x64/ARM64 单文件 EXE。BunDesk 下载与构建 Bun **同版本**的 Windows runtime，先跨平台写入图标、版本资源和 manifest，再通过 `executablePath` 完成 Bun 编译。Windows 构建机不是必需条件。
+### Cross-compilation support
 
-> 当前产物是可直接分发的单文件 EXE。MSI、MSIX 或安装向导不是 0.1 版的产物格式。
+Windows x64/ARM64 single-file EXEs can be produced on Linux CI. BunDesk downloads a Windows runtime of the **same version** as the building Bun, writes icon, version resources and manifest cross-platform first, then completes the Bun compile via `executablePath`. A Windows build machine is not required.
 
-### 不附带 Chromium
+> The current artifact is a directly distributable single-file EXE. MSI, MSIX and installer wizards are not 0.1 artifact formats.
 
-运行时使用系统已经安装的 Microsoft Edge、Google Chrome 或 Chromium，并以 `--app=<url>` 打开独立应用窗口。代价是目标机器必须有兼容浏览器；收益是更小的发布物、更少的 renderer 更新负担和更短的打包链路。
+### No bundled Chromium
 
-## 与 Electron / Tauri 的定位
+At runtime the app uses the Microsoft Edge, Google Chrome or Chromium already installed on the system, opened as a standalone app window via `--app=<url>`. The cost is that the target machine must have a compatible browser; the payoff is smaller releases, less renderer update burden and a shorter packaging pipeline.
+
+## Positioning vs Electron / Tauri
 
 | | BunDesk | Electron | Tauri |
 | --- | --- | --- | --- |
-| 应用后端 | Bun | Node.js | Rust + 可选 sidecar |
-| Renderer | 系统 Edge/Chrome/Chromium | 随应用附带 Chromium | 系统 WebView |
-| 正式构建主链路 | Bun bundle + compile | JS bundle + Electron packaging | 前端构建 + Rust/native compile |
-| Linux 构建 Windows 单文件 EXE | 支持 | 依赖目标打包配置 | 通常需要额外交叉工具链 |
-| 调试 | Bun + 浏览器 DevTools | Electron DevTools | WebView DevTools + Rust 调试 |
-| 原生能力 | Bun/Node API + Windows 集成模块 | Electron API | Tauri 插件/Rust |
+| App backend | Bun | Node.js | Rust + optional sidecar |
+| Renderer | System Edge/Chrome/Chromium | Bundled Chromium | System WebView |
+| Main release-build path | Bun bundle + compile | JS bundle + Electron packaging | Frontend build + Rust/native compile |
+| Windows single-file EXE from Linux | Yes | Depends on target packaging config | Usually needs an extra cross toolchain |
+| Debugging | Bun + browser DevTools | Electron DevTools | WebView DevTools + Rust debugging |
+| Native capabilities | Bun/Node API + Windows integration module | Electron API | Tauri plugins/Rust |
 
-BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要深度原生 UI、系统级沙箱或随应用固定 Chromium 版本时，应选择更匹配的方案。
+BunDesk suits tool-style desktop apps built around a local HTTP service plus a Web UI. When you need deeply native UI, OS-level sandboxing or a Chromium version pinned to the app, pick a solution that matches better.
 
-## 核心功能
+## Core features
 
-- `createDesktopApp(...)` 一体化托管 server、窗口和生命周期；
-- **cli + api + gui 三层**：action 注册一次，自动获得 `my-app <name>` CLI、`POST /api/actions/<name>` API 和 `/__bundesk/actions` 控制台页；
-- `launchAppWindow(...)` 等组合式底层 API；
-- Edge/Chrome/Chromium `--app=<url>` 独立窗口（macOS 含 Brave），Termux 走 Android VIEW intent；
-- 带随机 256-bit token 的 loopback IPC 单实例；
-- 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调，action 结果可回传；
-- 静态二进制 URL/ETag/SHA-256 和 GitHub Releases 两种升级 provider；
-- 下载校验、原子替换、失败回滚、重启和旧版本清理；
-- 系统通知（Windows WinRT toast，经 PowerShell 桥；Linux notify-send / macOS osascript / Termux termux-notification）；
-- 系统托盘（Windows 已实现：纯 bun:ffi 调 Win32，无原生编译）；
-- 服务注册（headless `serve` 常驻）：Windows HKCU Run key、Linux systemd user unit、macOS launchd LaunchAgent、Termux boot 脚本；
-- Windows 当前用户文件关联、默认打开方式和开始菜单快捷方式；
-- Linux XDG 文件关联、desktop entry 和 mimeapps 注册（register/unregister/status）；
-- macOS `.app` 打包：Info.plist、UTI/文档类型、URL scheme、图标与 ad-hoc codesign；
-- Windows `detached` / `hidden` / `inherit` 三种控制台策略；
-- Linux 交叉构建 Windows x64、baseline x64 和 ARM64，以及 macOS x64/ARM64 `.app`；
-- 构建结果大小与 SHA-256 输出。
+- `createDesktopApp(...)` hosts the server, windows and lifecycle in one place;
+- **one functionality, three layers (cli + api + gui)**: register an action once and automatically get the `my-app <name>` CLI, the `POST /api/actions/<name>` API and the `/__bundesk/actions` console page;
+- low-level composable APIs such as `launchAppWindow(...)`;
+- standalone Edge/Chrome/Chromium `--app=<url>` windows (Brave included on macOS); Termux uses the Android VIEW intent;
+- loopback IPC single instance with a random 256-bit token;
+- secondary instances forward `argv`, `cwd` and PID to the primary instance's callback, and action results can be sent back;
+- two update providers: static binary URL/ETag/SHA-256 and GitHub Releases;
+- download verification, atomic replacement, rollback on failure, restart and cleanup of old versions;
+- system notifications (Windows WinRT toast via a PowerShell bridge; Linux notify-send / macOS osascript / Termux termux-notification);
+- system tray (implemented on Windows: pure bun:ffi against Win32, no native compilation);
+- service registration (headless `serve` daemon): Windows HKCU Run key, Linux systemd user unit, macOS launchd LaunchAgent, Termux boot script;
+- Windows per-user file associations, default open behavior and Start Menu shortcuts;
+- Linux XDG file associations, desktop entries and mimeapps registration (register/unregister/status);
+- macOS `.app` packaging: Info.plist, UTI/document types, URL schemes, icons and ad-hoc codesign;
+- three Windows console strategies: `detached` / `hidden` / `inherit`;
+- cross-compiling from Linux to Windows x64, baseline x64 and ARM64, as well as macOS x64/ARM64 `.app`;
+- build artifact size and SHA-256 output.
 
-## 安装
+## Installation
 
 ```bash
 bun add -d github:liooil/bundesk
 ```
 
-包名 `bundesk` 可直接用于 Bun：
+The package name `bundesk` is used directly with Bun:
 
 ```ts
 import { createDesktopApp, defineConfig } from 'bundesk'
 ```
 
-要求 Bun 1.3.14 或更新版本。
+Requires Bun 1.3.14 or newer.
 
-## 运行时快速开始
+## Runtime quick start
 
-应用 entrypoint：
+The app entrypoint:
 
 ```ts
 import {
@@ -150,26 +152,26 @@ const app = createDesktopApp({
 await app.run()
 ```
 
-框架保留以下应用命令：
+The framework reserves the following app commands:
 
 ```text
-my-app                         启动 server 和 App Mode 窗口
-my-app <file>                  启动或把文件参数转发给主实例
-my-app serve --no-browser      只启动 HTTP server
-my-app register [--default]    注册当前用户文件关联和 launcher
-my-app unregister              取消注册
-my-app status                  查看桌面集成状态
-my-app install-service         注册为开机自启服务（headless serve）
-my-app uninstall-service       移除服务注册
-my-app service-status          查看服务状态
-my-app upgrade [--force]       检查、安装升级并重启
+my-app                         start the server and an App Mode window
+my-app <file>                  start, or forward the file argument to the primary instance
+my-app serve --no-browser      start only the HTTP server
+my-app register [--default]    register per-user file associations and a launcher
+my-app unregister              undo the registration
+my-app status                  show desktop integration status
+my-app install-service         register as an auto-start service (headless serve)
+my-app uninstall-service       remove the service registration
+my-app service-status          show service status
+my-app upgrade [--force]       check for, install and restart after an upgrade
 ```
 
-`register` 只写 `HKCU`，不要求管理员权限。`--default` 写当前用户的扩展名默认 ProgID，但不会绕过 Windows 的 `UserChoice` 保护。
+`register` only writes `HKCU` and requires no administrator privileges. `--default` writes the per-user default ProgID for the extension, but does not bypass Windows' `UserChoice` protection.
 
-## 组合式 API
+## Composable API
 
-不使用一体化入口时，可以单独组合：
+When you don't use the all-in-one entrypoint, compose the pieces individually:
 
 ```ts
 import {
@@ -182,17 +184,17 @@ import {
 } from 'bundesk'
 ```
 
-这些模块与 `createDesktopApp` 使用同一实现，不存在第二套行为。
+These modules share the same implementation as `createDesktopApp`; there is no second set of behaviors.
 
-## cli + api + gui 三层
+## cli + api + gui three layers
 
-BunDesk 的核心理念之一：**一个 app 由 cli、api、gui 三层构成，同一功能可以在三层都有**。注册一次 action，框架自动把它暴露到三层，handler 只在应用进程里跑一次：
+One of BunDesk's core ideas: **an app consists of three layers — cli, api, gui — and the same functionality can exist on all three**. Register an action once and the framework automatically exposes it on all three layers; the handler runs exactly once in the app process:
 
-| 层 | 入口 |
+| Layer | Entry point |
 | --- | --- |
 | CLI | `my-app <name> --arg value ...` |
-| API | `POST /api/actions/<name>`，JSON body 传命名参数；`GET /api/actions` 返回 schema |
-| GUI | `/__bundesk/actions` 生成的控制台页，按 schema 渲染表单并调用同一 API |
+| API | `POST /api/actions/<name>`, named parameters in the JSON body; `GET /api/actions` returns the schema |
+| GUI | the console page generated at `/__bundesk/actions`, which renders a form from the schema and calls the same API |
 
 ```ts
 const app = createDesktopApp({
@@ -206,40 +208,40 @@ const app = createDesktopApp({
       { name: 'pretty', type: 'boolean', default: true },
     ],
     async handler(args, context) {
-      // 同一实现：CLI、API、GUI 都走到这里
+      // One implementation: CLI, API and GUI all land here
       return { exported: true, format: args.format, pretty: args.pretty }
     },
   }],
 })
 ```
 
-三种调用等价：
+All three invocations are equivalent:
 
 ```bash
 my-app export --format csv --pretty=false
 curl -X POST http://127.0.0.1:PORT/api/actions/export \
   -H 'content-type: application/json' -d '{"format":"csv","pretty":false}'
-# 浏览器打开 http://127.0.0.1:PORT/__bundesk/actions
+# open http://127.0.0.1:PORT/__bundesk/actions in a browser
 ```
 
-行为约定：
+Behavioral conventions:
 
-- CLI 调用 `my-app <action>` 时，首个参数匹配注册的 action 名即进入 action 模式，之后的 `--flag value` 全部作为 action 参数（框架命令如 `serve`/`register` 优先）。
-- 单实例运行中时，CLI action 通过 loopback IPC 转发给主实例执行，**结果 JSON 原样回传**打印；未运行时则就地启动、执行、退出。
-- action 结果必须是 JSON 可序列化的（IPC 与 API 都走 JSON）。
-- handler 收到完整 `context`（server、url、window、updater、actions、launchWindow、stop），action 也可以调用 `context.actions.call(...)` 组合其他 action。
-- `server` 配置使用 `routes` 时，框架自动合并 `/api/actions`、`/api/actions/:name`、`/__bundesk/actions` 三个保留路径；使用 `fetch` 兜底且没有 `routes` 时不会自动挂载，但 `context.actions` 与 CLI 层不受影响。actions API 默认随 server 绑定（默认 127.0.0.1），请勿在无鉴权时把 hostname 暴露到 0.0.0.0。
-- action 名必须是 kebab-case，且不能与框架命令（`serve`、`register`、`unregister`、`status`、`upgrade`）重名。
+- When the CLI runs `my-app <action>`, the first argument matching a registered action name enters action mode, and everything after it (`--flag value`) is passed as action arguments (framework commands such as `serve`/`register` take precedence).
+- When a single instance is already running, CLI actions are forwarded to the primary instance over loopback IPC, and the **result JSON is returned verbatim** and printed; when nothing is running, the app starts in place, executes and exits.
+- Action results must be JSON-serializable (both IPC and API use JSON).
+- The handler receives the full `context` (server, url, window, updater, actions, launchWindow, stop), and an action can call `context.actions.call(...)` to compose other actions.
+- When the `server` config uses `routes`, the framework automatically merges in the three reserved paths `/api/actions`, `/api/actions/:name` and `/__bundesk/actions`; with a `fetch` fallback and no `routes`, they are not auto-mounted, but `context.actions` and the CLI layer are unaffected. The actions API binds together with the server by default (127.0.0.1 by default) — do not expose the hostname on 0.0.0.0 without authentication.
+- Action names must be kebab-case and must not collide with framework commands (`serve`, `register`, `unregister`, `status`, `upgrade`).
 
-## 平台集成
+## Platform integration
 
-### Linux：XDG 文件关联与 launcher
+### Linux: XDG file associations and launcher
 
-`register` / `unregister` / `status` 在 Linux 上写入 XDG 标准位置，全部为当前用户级：
+On Linux, `register` / `unregister` / `status` write to the XDG standard locations, all at the current-user level:
 
-- MIME 包：`~/.local/share/mime/packages/<appId>.xml`（扩展名 → `application/x-<progId>`），随后尽力刷新 `update-mime-database`；
-- desktop entry：`~/.local/share/applications/<appId>.desktop`（`Exec="<exe>" %F`、`MimeType=`）；
-- 默认关联：`~/.config/mimeapps.list` 的 `[Added Associations]`（`--default` 时写入 `[Default Applications]`）。
+- MIME package: `~/.local/share/mime/packages/<appId>.xml` (extension → `application/x-<progId>`), followed by a best-effort `update-mime-database` refresh;
+- desktop entry: `~/.local/share/applications/<appId>.desktop` (`Exec="<exe>" %F`, `MimeType=`);
+- default associations: `[Added Associations]` in `~/.config/mimeapps.list` (`--default` writes to `[Default Applications]`).
 
 ```bash
 my-app register [--default]
@@ -247,11 +249,11 @@ my-app unregister
 my-app status
 ```
 
-没有 `update-mime-database` 时注册仍然成功，只是 MIME 缓存不刷新。
+Without `update-mime-database`, registration still succeeds; only the MIME cache is not refreshed.
 
-### macOS：构建期 `.app` 打包
+### macOS: build-time `.app` packaging
 
-macOS 没有运行期注册：文件关联、URL scheme 和图标在构建时写进 bundle 的 `Info.plist`，`register`/`status` 命令返回明确的 unsupported 说明。
+macOS has no runtime registration: file associations, URL schemes and icons are written into the bundle's `Info.plist` at build time, and the `register`/`status` commands return an explicit unsupported message.
 
 ```ts
 export default defineConfig({
@@ -266,120 +268,120 @@ export default defineConfig({
     documentTypes: [{ extension: '.demo', name: 'My App Document' }],
     urlTypes: [{ scheme: 'myapp' }],
     background: false,
-    codesign: false, // 默认在 macOS 主机上做 ad-hoc 签名；false 跳过
+    codesign: false, // ad-hoc signing by default on macOS hosts; false skips it
   },
 })
 ```
 
-- `outfile` 以 `.app` 结尾时生成 bundle：`Contents/MacOS/<name>` 为可执行文件，`Contents/Info.plist` 含 `CFBundleDocumentTypes`、`UTExportedTypeDeclarations`（自动导出 UTI）和 `CFBundleURLTypes`。
-- 非 `.app` 的 darwin `outfile` 保持单文件 Mach-O 形态。
-- 在 macOS 主机上默认执行 `codesign --force --deep -s -`（ad-hoc）；交叉构建产物不会签名，分发前必须在 Mac 上签名并公证（`codesign` + `notarytool`）。
-- Linux CI 同样可以交叉构建 macOS x64/ARM64 `.app`（Bun 下载同版本 darwin runtime）。
+- When `outfile` ends in `.app`, a bundle is generated: `Contents/MacOS/<name>` is the executable, and `Contents/Info.plist` contains `CFBundleDocumentTypes`, `UTExportedTypeDeclarations` (UTIs exported automatically) and `CFBundleURLTypes`.
+- A darwin `outfile` that is not `.app` stays a single-file Mach-O.
+- On macOS hosts, `codesign --force --deep -s -` (ad-hoc) runs by default; cross-compiled artifacts are not signed, so they must be signed and notarized on a Mac before distribution (`codesign` + `notarytool`).
+- Linux CI can also cross-compile macOS x64/ARM64 `.app` bundles (Bun downloads the same-version darwin runtime).
 
-### Termux（Android）
+### Termux (Android)
 
-BunDesk 检测到 Termux 环境（`$PREFIX` 指向 `com.termux` 数据目录）时：
+When BunDesk detects a Termux environment (`$PREFIX` pointing at the `com.termux` data directory):
 
-- 窗口不再是 Chromium `--app`，而是 Android VIEW intent（`am start` 或 `termux-open-url`），由系统浏览器打开 URL；
-- 应用生命周期、单实例、HTTP server、自动升级与普通平台一致；
-- `exitWithWindow` 在 Termux 下不生效（intent 立即返回）。
+- windows are no longer Chromium `--app` but an Android VIEW intent (`am start` or `termux-open-url`) that opens the URL in the system browser;
+- the app lifecycle, single instance, HTTP server and automatic updates behave as on regular platforms;
+- `exitWithWindow` has no effect under Termux (the intent returns immediately).
 
-注意：Bun 运行时需能在 Termux 中执行（glibc proot 环境，如 `proot-distro` 内的 Debian/Ubuntu），浏览器侧无额外要求。
+Note: the Bun runtime must be able to execute inside Termux (a glibc proot environment, e.g. Debian/Ubuntu under `proot-distro`); there are no extra requirements on the browser side.
 
-## 注册为服务
+## Registering as a service
 
-因为 app 自带 API 层并能 `serve`，它可以作为常驻 headless 服务注册：开机/登录自动启动、不弹窗口、API 一直在线。GUI 交互通过单实例 IPC 转发到服务进程，由 `onSecondInstance` 决定 `launchWindow()` 连回同一 server。
+Because the app ships an API layer and can `serve`, it can be registered as a resident headless service: it starts automatically at boot/login, opens no window, and the API stays online. GUI interaction is forwarded to the service process via single-instance IPC, and `onSecondInstance` decides whether `launchWindow()` reconnects to the same server.
 
 ```bash
-my-app install-service        # 注册并立即启动
-my-app service-status         # 查看注册与运行状态
-my-app uninstall-service      # 停止并移除
+my-app install-service        # register and start now
+my-app service-status         # show registration and running state
+my-app uninstall-service      # stop and remove
 ```
 
-| 平台 | 机制 | 说明 |
+| Platform | Mechanism | Notes |
 | --- | --- | --- |
-| Windows | HKCU Run key | 登录自启，无需管理员；真正的 SCM 服务需要原生 `StartServiceCtrlDispatcher`，Bun 无法提供 |
-| Linux | systemd user unit | `~/.config/systemd/user/<appId>.service`，`systemctl --user enable --now`；无需 root |
-| macOS | launchd LaunchAgent | `~/Library/LaunchAgents/<appId>.plist`，`launchctl bootstrap gui/<uid>`；日志写入应用数据目录 |
-| Termux | termux-boot 脚本 | `~/.termux/boot/<appId>.sh`，由 Termux:Boot 在开机时执行 |
+| Windows | HKCU Run key | starts at login, no administrator required; a true SCM service needs native `StartServiceCtrlDispatcher`, which Bun cannot provide |
+| Linux | systemd user unit | `~/.config/systemd/user/<appId>.service`, `systemctl --user enable --now`; no root required |
+| macOS | launchd LaunchAgent | `~/Library/LaunchAgents/<appId>.plist`, `launchctl bootstrap gui/<uid>`; logs are written to the app data directory |
+| Termux | termux-boot script | `~/.termux/boot/<appId>.sh`, executed by Termux:Boot at boot |
 
-约定：
+Conventions:
 
-- 服务以 `"<exe>" serve --no-browser` 运行，注册时固化可执行文件路径；框架的原子自升级在同一路径替换文件，服务无需重新注册；
-- `service-status` 的 `active` 字段通过单实例记录（`instance.json` + PID 存活）判断，跨平台一致；
-- `install-service` / `uninstall-service` 支持 `--dry-run` 预览；
-- 服务使用 `WorkingDirectory`/`RunAtLoad`/`Restart=on-failure`/`KeepAlive` 保证崩溃拉起，应用内的相对路径应基于 `process.execPath` 解析而非 cwd。
+- The service runs as `"<exe>" serve --no-browser`, with the executable path fixed at registration time; the framework's atomic self-update replaces the file at the same path, so the service does not need re-registration;
+- the `active` field of `service-status` is determined from the single-instance record (`instance.json` + PID liveness), consistently across platforms;
+- `install-service` / `uninstall-service` support a `--dry-run` preview;
+- the service uses `WorkingDirectory`/`RunAtLoad`/`Restart=on-failure`/`KeepAlive` to be restarted after crashes; relative paths inside the app should resolve against `process.execPath`, not cwd.
 
-## 系统托盘
+## System tray
 
 ```ts
 const app = createDesktopApp({
   id: 'my-company.my-app',
   server: { port: 0, routes: { '/': new Response('Hello') } },
   tray: {
-    icon: 'src/app/tray.ico',   // Windows：.ico 或可执行文件路径；默认系统图标
+    icon: 'src/app/tray.ico',   // Windows: .ico or executable path; defaults to the system icon
     tooltip: 'My App',
     menu: [
-      { label: '打开主窗口', onClick: (context) => context.launchWindow() },
+      { label: 'Open main window', onClick: (context) => context.launchWindow() },
       { separator: true },
-      { label: '退出', onClick: (context) => context.stop() },
+      { label: 'Quit', onClick: (context) => context.stop() },
     ],
-    onActivate: (context) => context.launchWindow(),  // 左键点击
+    onActivate: (context) => context.launchWindow(),  // left click
   },
 })
 ```
 
-- 配置托盘后，关闭窗口默认**不退出**（`exitWithWindow` 默认为 false），应用驻留托盘；托盘菜单里调用 `context.stop()` 退出；
-- 交互回调（`onActivate`、菜单 `onClick`）与 action 一样拿到完整 `context`；
-- 托盘图标可运行期更新：`context.tray?.update({ tooltip: '...', icon: '...' })`，`context.tray?.destroy()` 移除。
+- With a tray configured, closing the window does **not** exit by default (`exitWithWindow` defaults to false); the app stays resident in the tray, and you quit via `context.stop()` from the tray menu;
+- interaction callbacks (`onActivate`, menu `onClick`) receive the same full `context` as actions;
+- the tray icon can be updated at runtime: `context.tray?.update({ tooltip: '...', icon: '...' })`, and `context.tray?.destroy()` removes it.
 
-平台现状：
+Platform status:
 
-| 平台 | 状态 | 机制 |
+| Platform | Status | Mechanism |
 | --- | --- | --- |
-| Windows | **已实现** | 纯 `bun:ffi` 调 user32/shell32：`Shell_NotifyIconW` + 隐藏窗口 + 50ms 消息泵，无原生工具链 |
-| macOS | 未实现 | AppKit `NSStatusItem` 经 `objc_msgSend` FFI（需 NSApplication/run-loop 配合，可行但脆弱） |
-| Linux | 未实现 | StatusNotifierItem D-Bus 协议（纯 JS D-Bus 客户端 + DBusMenu） |
-| Termux | 不支持 | Android 无托盘概念 |
+| Windows | **Implemented** | pure `bun:ffi` against user32/shell32: `Shell_NotifyIconW` + hidden window + 50ms message pump, no native toolchain |
+| macOS | Not implemented | AppKit `NSStatusItem` via `objc_msgSend` FFI (needs NSApplication/run-loop cooperation; feasible but fragile) |
+| Linux | Not implemented | StatusNotifierItem D-Bus protocol (pure JS D-Bus client + DBusMenu) |
+| Termux | Not supported | Android has no tray concept |
 
-Windows 上新注册的图标可能先出现在溢出区（Windows 默认行为），用户拖到主托盘即可；`iconPresent()` 探测对溢出区隐藏图标按文档返回 false。
+On Windows, newly registered icons may first appear in the overflow area (Windows default behavior); users can drag them into the main tray. `iconPresent()` returns false per spec for icons hidden in the overflow area.
 
-## 系统通知
+## System notifications
 
 ```ts
 const app = createDesktopApp({
   id: 'my-company.my-app',
   server: { port: 0, routes: { '/': new Response('Hello') } },
-  notifications: { aumid: 'MyCompany.MyApp' },   // 可选：toast 归属的 AppUserModelID
+  notifications: { aumid: 'MyCompany.MyApp' },   // optional: AppUserModelID the toast is attributed to
 })
 
-// 应用内任意位置
+// anywhere in the app
 await context.notify({
-  title: '构建完成',
-  body: 'release 产物已生成',
+  title: 'Build finished',
+  body: 'The release artifact has been generated',
 })
 ```
 
-平台机制（`context.notify` 返回是否投递成功）：
+Platform mechanisms (`context.notify` returns whether delivery succeeded):
 
-| 平台 | 机制 | 点击回调 |
+| Platform | Mechanism | Click callback |
 | --- | --- | --- |
-| Windows | WinRT toast，经 PowerShell 桥（`Windows.UI.Notifications`） | 未实现（需 AUMID 注册 + activation 处理） |
-| Linux | `notify-send`（libnotify，`icon` 走 `-i`） | 无 |
-| macOS | `osascript` display notification | 无 |
-| Termux | `termux-notification`（termux-api） | 无 |
+| Windows | WinRT toast via the PowerShell bridge (`Windows.UI.Notifications`) | Not implemented (requires AUMID registration + activation handling) |
+| Linux | `notify-send` (libnotify, `icon` via `-i`) | None |
+| macOS | `osascript` display notification | None |
+| Termux | `termux-notification` (termux-api) | None |
 
-已知取舍：
+Known trade-offs:
 
-- 经典 `Shell_NotifyIcon` 气泡在 Windows 10/11 已被抑制（实测 `NIM_MODIFY` 返回成功但屏幕无任何显示，WinForms 对照同样不显示），所以 Windows 走 toast；
-- 默认 toast 以 "Windows PowerShell" 为来源名；配置 `{ aumid }` 并以该 AUMID 创建开始菜单快捷方式后，toast 以你的应用名义出现；
-- 点击回调需要 toast activation（启动参数 + 前台激活），列入 roadmap。
+- the classic `Shell_NotifyIcon` balloon is suppressed on Windows 10/11 (tested: `NIM_MODIFY` returns success but nothing appears on screen, and a WinForms control shows nothing either), so Windows uses toast;
+- by default the toast shows "Windows PowerShell" as the source name; after configuring `{ aumid }` and creating a Start Menu shortcut with that AUMID, toasts appear under your app's name;
+- click callbacks need toast activation (launch arguments + foreground activation), on the roadmap.
 
-## 自动升级
+## Automatic updates
 
-### 静态发布地址
+### Static release URL
 
-适合对象存储、CDN 或普通 HTTP server：
+For object storage, CDN or a plain HTTP server:
 
 ```ts
 import { staticBinaryProvider } from 'bundesk'
@@ -391,7 +393,7 @@ const provider = staticBinaryProvider({
 })
 ```
 
-provider 使用 `HEAD` 的 ETag 检查当前文件；支持 SHA-256 ETag、普通 MD5 和兼容 16 MiB 分片的对象存储 ETag。下载阶段还会校验 Content-Length、`X-Checksum-SHA256` / `Digest`、可选 descriptor SHA-256，以及 Windows EXE 的 `MZ` 文件头。
+The provider checks the current file via the `HEAD` ETag; it supports SHA-256 ETags, plain MD5, and object-storage ETags compatible with 16 MiB multipart uploads. During download it also verifies Content-Length, `X-Checksum-SHA256` / `Digest`, the optional descriptor SHA-256, and the `MZ` file header for Windows EXEs.
 
 ### GitHub Releases
 
@@ -405,15 +407,15 @@ const provider = githubReleaseProvider({
 })
 ```
 
-provider 比较当前版本与 release tag，选择指定 asset，并使用 GitHub asset digest（存在时）校验下载。
+The provider compares the current version against the release tag, selects the specified asset, and verifies the download with the GitHub asset digest (when present).
 
-## 单实例安全模型
+## Single-instance security model
 
-BunDesk 不把实例转发接口暴露在应用 routes 中。框架单独启动只绑定 `127.0.0.1` 的 IPC HTTP server，并为每次主实例生成 256-bit 随机 token。token 只写入当前用户应用数据目录的权限受限文件；次实例必须携带 Bearer token 才能转发参数。崩溃留下的 lock/record 会在确认原 PID 已退出后清理。
+BunDesk does not expose the instance-forwarding interface in app routes. The framework starts a separate IPC HTTP server bound to `127.0.0.1` only, and generates a 256-bit random token per primary instance. The token is written only to a permission-restricted file in the current user's app data directory; secondary instances must present the Bearer token to forward arguments. Locks/records left behind by a crash are cleaned up once the original PID is confirmed to have exited.
 
-## 构建配置
+## Build configuration
 
-在项目根目录创建 `bundesk.config.ts`：
+Create `bundesk.config.ts` in the project root:
 
 ```ts
 import { defineConfig } from 'bundesk'
@@ -438,7 +440,7 @@ export default defineConfig({
 })
 ```
 
-构建：
+Build:
 
 ```bash
 bunx bundesk
@@ -446,65 +448,66 @@ bunx bundesk --config build/bundesk.config.ts
 bunx bundesk --target bun-windows-x64-baseline
 ```
 
-配置文件可以导出数组，一次生成多个平台产物。应用自己的 Tailwind/Vite/Worker 插件直接通过标准 `plugins` 传入，BunDesk 不复制应用构建逻辑。
+The config file can export an array to produce artifacts for multiple platforms in one run. Your own Tailwind/Vite/Worker plugins are passed directly through the standard `plugins` option; BunDesk does not duplicate your app's build logic.
 
-## Windows 控制台模式
+## Windows console modes
 
-| `windows.console` | 行为 | 场景 |
+| `windows.console` | Behavior | Use case |
 | --- | --- | --- |
-| `detached`（默认） | 双击不分配控制台；终端启动时继承现有终端 | 同时提供 GUI 和 CLI |
-| `hidden` | 使用 Bun `hideConsole`，按 GUI 程序运行 | 纯 GUI |
-| `inherit` | 保留 Bun 默认控制台行为 | CLI 优先 |
+| `detached` (default) | no console is allocated on double-click; inherits the existing terminal when launched from one | GUI and CLI at the same time |
+| `hidden` | runs as a GUI program using Bun's `hideConsole` | GUI only |
+| `inherit` | keeps Bun's default console behavior | CLI first |
 
-`detached` 通过 Windows `consoleAllocationPolicy` manifest 实现。BunDesk 先修改干净的 `bun.exe` 再编译，避免在 Bun payload 已追加后重写 PE 文件。
+`detached` is implemented via the Windows `consoleAllocationPolicy` manifest. BunDesk modifies a clean `bun.exe` before compiling, avoiding any rewrite of the PE file after the Bun payload has been appended.
 
-## 交叉构建 runtime
+## Cross-compiling the runtime
 
-Windows 本机且架构一致时，默认复用当前 `bun.exe`。Linux 交叉构建或 baseline/ARM64 构建会下载：
+On native Windows with a matching architecture, the current `bun.exe` is reused by default. Linux cross-compilation or baseline/ARM64 builds download:
 
 ```text
 https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 ```
 
-可通过 `runtime.downloadUrl` 使用自定义镜像，通过 `runtime.sha256` 固定解压后 `bun.exe` 的校验值。
+A custom mirror can be used via `runtime.downloadUrl`, and `runtime.sha256` pins the checksum of the extracted `bun.exe`.
 
-## 平台范围
+## Platform support
 
-| 功能 | Windows | Linux | macOS | Termux (Android) |
+| Feature | Windows | Linux | macOS | Termux (Android) |
 | --- | --- | --- | --- | --- |
-| HTTP server / 生命周期 | 支持 | 支持 | 支持 | 支持 |
-| Chromium App Mode 窗口 | 支持 | 支持 | 支持（含 Brave） | VIEW intent |
-| 安全单实例与参数转发 | 支持 | 支持 | 支持 | 支持 |
-| 单文件构建 / `.app` bundle | 单文件 EXE | 单文件 | `.app` bundle | n/a |
-| 交叉构建 | 任意平台 → EXE | 任意平台 → 单文件 | Linux/macOS → `.app` | n/a |
-| 自动替换当前可执行文件 | 支持 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用 |
-| 文件关联 / launcher | 支持（HKCU） | 支持（XDG） | 构建期 Info.plist | 不支持 |
-| 服务注册（headless serve） | HKCU Run key | systemd user | launchd agent | termux-boot |
-| 系统托盘 | 支持（Win32 FFI） | 计划（SNI D-Bus） | 计划（AppKit FFI） | 不支持 |
-| 系统通知 | WinRT toast（PowerShell 桥） | notify-send | osascript | termux-notification |
+| HTTP server / lifecycle | Yes | Yes | Yes | Yes |
+| Chromium App Mode window | Yes | Yes | Yes (incl. Brave) | VIEW intent |
+| Secure single instance and argument forwarding | Yes | Yes | Yes | Yes |
+| Single-file build / `.app` bundle | single-file EXE | single file | `.app` bundle | n/a |
+| Cross-compilation | any platform → EXE | any platform → single file | Linux/macOS → `.app` | n/a |
+| Atomic replacement of the current executable | Yes | low-level API available; no desktop release commitment in 0.1 | low-level API available; no desktop release commitment in 0.1 | low-level API available |
+| File associations / launcher | Yes (HKCU) | Yes (XDG) | build-time Info.plist | No |
+| Service registration (headless serve) | HKCU Run key | systemd user | launchd agent | termux-boot |
+| System tray | Yes (Win32 FFI) | Planned (SNI D-Bus) | Planned (AppKit FFI) | No |
+| System notifications | WinRT toast (PowerShell bridge) | notify-send | osascript | termux-notification |
 
-Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`windows`/`runtime` 构建选项要求 `bun-windows-*` 目标，`macos` 选项要求 `bun-darwin-*` 目标且 `outfile` 以 `.app` 结尾。
+The Windows console modes (`detached`/`hidden`/`inherit`) only apply on Windows; the `windows`/`runtime` build options require a `bun-windows-*` target, and the `macos` option requires a `bun-darwin-*` target with an `outfile` ending in `.app`.
 
 ## Roadmap
 
-完整方案见 [应用迁移与性能基准计划](docs/migration-benchmark-plan.md)。当前只完成选型和实验设计，尚未开始迁移或采集性能数据。
+See the [application migration and performance benchmark plan](docs/migration-benchmark-plan.md) for the full proposal. Only the technology selection and experimental design are done so far; migration and performance data collection have not started.
 
-已完成（本轮）：
+Done (this round):
 
-- macOS 运行时支持（浏览器候选、数据目录、darwin 升级 asset）与 `.app` bundle 构建（Info.plist、UTI/文档类型、URL scheme、图标、ad-hoc codesign）；
-- Linux XDG 文件关联、desktop entry、mimeapps 注册（`register`/`unregister`/`status`）；
-- Termux（Android）检测与 VIEW intent 窗口；
-- **cli + api + gui 三层 action 注册表**（CLI 转发结果回传、`/api/actions`、`/__bundesk/actions` 控制台页）。
+- macOS runtime support (browser candidates, data directory, darwin update asset) and `.app` bundle builds (Info.plist, UTI/document types, URL schemes, icon, ad-hoc codesign);
+- Linux XDG file associations, desktop entries and mimeapps registration (`register`/`unregister`/`status`);
+- Termux (Android) detection and VIEW intent windows;
+- **the cli + api + gui three-layer action registry** (CLI forwarding with result return, `/api/actions`, the `/__bundesk/actions` console page);
+- service registration (Windows Run key / systemd / launchd / termux-boot), the Windows system tray (pure Win32 FFI) and system notifications (WinRT toast bridge, notify-send, osascript, termux-notification).
 
-待评估：
+To be evaluated:
 
-- 第一轮：draw.io Desktop（Electron）、NextChat（Tauri）、NeoHtop（Tauri），覆盖 static-heavy、web-first 和 native-backend 三类应用；
-- 第二轮：MarkText（Electron）、Yaak（Tauri），扩大文件系统、编辑器、数据库、网络、插件和 secret/keychain 的兼容性边界；
-- macOS 签名/公证流水线在真实 Mac CI 上的落地；
-- **Hermes Agent + Poly**：评估以 [Poly](https://github.com/liooil/poly) 在同一进程中承载 Bun 与 RustPython，将 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的 Python agent/runtime 与 BunDesk 桌面壳整合；
-- **Oh My Pi + Poly**：评估将 [Oh My Pi](https://github.com/can1357/oh-my-pi) 的 Bun/TypeScript 主体直接接入 BunDesk，并通过 Poly 承载 Python 工具内核。
+- Round 1: draw.io Desktop (Electron), NextChat (Tauri), NeoHtop (Tauri), covering static-heavy, web-first and native-backend app types;
+- Round 2: MarkText (Electron), Yaak (Tauri), widening the compatibility boundary for file systems, editors, databases, networking, plugins and secret/keychain;
+- landing the macOS signing/notarization pipeline on real Mac CI;
+- **Hermes Agent + Poly**: evaluate hosting Bun and RustPython in the same process via [Poly](https://github.com/liooil/poly), integrating [Hermes Agent](https://github.com/NousResearch/hermes-agent)'s Python agent/runtime with the BunDesk desktop shell;
+- **Oh My Pi + Poly**: evaluate wiring [Oh My Pi](https://github.com/can1357/oh-my-pi)'s Bun/TypeScript core directly into BunDesk, hosting the Python tool kernel via Poly.
 
-## 开发与验证
+## Development and verification
 
 ```bash
 bun install
@@ -513,7 +516,7 @@ bun test
 bun run pack:check
 ```
 
-测试覆盖：真实 Windows/Linux 单文件构建与执行、macOS `.app` 交叉构建结构（Mach-O、Info.plist）、Windows PE metadata/manifest、真实 Chromium App Mode 进程、安全单实例转发、action 三层的 API/CLI/转发结果回传、Linux XDG 注册往返、静态升级安装、GitHub release provider，以及 Windows 注册表 dry-run。
+Test coverage: real Windows/Linux single-file builds and execution, macOS `.app` cross-compiled bundle structure (Mach-O, Info.plist), Windows PE metadata/manifest, real Chromium App Mode processes, secure single-instance forwarding, the API/CLI/forwarded-result round trips across the action layers, Linux XDG registration round trips, static update installation, the GitHub release provider, and Windows registry dry-runs.
 
 ## License
 
