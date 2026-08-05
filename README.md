@@ -59,6 +59,7 @@ BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要
 - 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调，action 结果可回传；
 - 静态二进制 URL/ETag/SHA-256 和 GitHub Releases 两种升级 provider；
 - 下载校验、原子替换、失败回滚、重启和旧版本清理；
+- 系统通知（Windows WinRT toast，经 PowerShell 桥；Linux notify-send / macOS osascript / Termux termux-notification）；
 - 系统托盘（Windows 已实现：纯 bun:ffi 调 Win32，无原生编译）；
 - 服务注册（headless `serve` 常驻）：Windows HKCU Run key、Linux systemd user unit、macOS launchd LaunchAgent、Termux boot 脚本；
 - Windows 当前用户文件关联、默认打开方式和开始菜单快捷方式；
@@ -343,6 +344,37 @@ const app = createDesktopApp({
 
 Windows 上新注册的图标可能先出现在溢出区（Windows 默认行为），用户拖到主托盘即可；`iconPresent()` 探测对溢出区隐藏图标按文档返回 false。
 
+## 系统通知
+
+```ts
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  server: { port: 0, routes: { '/': new Response('Hello') } },
+  notifications: { aumid: 'MyCompany.MyApp' },   // 可选：toast 归属的 AppUserModelID
+})
+
+// 应用内任意位置
+await context.notify({
+  title: '构建完成',
+  body: 'release 产物已生成',
+})
+```
+
+平台机制（`context.notify` 返回是否投递成功）：
+
+| 平台 | 机制 | 点击回调 |
+| --- | --- | --- |
+| Windows | WinRT toast，经 PowerShell 桥（`Windows.UI.Notifications`） | 未实现（需 AUMID 注册 + activation 处理） |
+| Linux | `notify-send`（libnotify，`icon` 走 `-i`） | 无 |
+| macOS | `osascript` display notification | 无 |
+| Termux | `termux-notification`（termux-api） | 无 |
+
+已知取舍：
+
+- 经典 `Shell_NotifyIcon` 气泡在 Windows 10/11 已被抑制（实测 `NIM_MODIFY` 返回成功但屏幕无任何显示，WinForms 对照同样不显示），所以 Windows 走 toast；
+- 默认 toast 以 "Windows PowerShell" 为来源名；配置 `{ aumid }` 并以该 AUMID 创建开始菜单快捷方式后，toast 以你的应用名义出现；
+- 点击回调需要 toast activation（启动参数 + 前台激活），列入 roadmap。
+
 ## 自动升级
 
 ### 静态发布地址
@@ -449,6 +481,7 @@ https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 | 文件关联 / launcher | 支持（HKCU） | 支持（XDG） | 构建期 Info.plist | 不支持 |
 | 服务注册（headless serve） | HKCU Run key | systemd user | launchd agent | termux-boot |
 | 系统托盘 | 支持（Win32 FFI） | 计划（SNI D-Bus） | 计划（AppKit FFI） | 不支持 |
+| 系统通知 | WinRT toast（PowerShell 桥） | notify-send | osascript | termux-notification |
 
 Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`windows`/`runtime` 构建选项要求 `bun-windows-*` 目标，`macos` 选项要求 `bun-darwin-*` 目标且 `outfile` 以 `.app` 结尾。
 

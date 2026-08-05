@@ -20,6 +20,7 @@ import {
   unregisterLinuxIntegration,
 } from './linux-integration'
 import { getServiceStatus, installService, uninstallService } from './service-integration'
+import { notifySystem, type DesktopNotificationOptions } from './notifications'
 import { createTray, type DesktopTrayOptions, type TrayController } from './tray'
 import { isTermux } from './platform'
 import {
@@ -59,6 +60,12 @@ export interface DesktopAppOptions<WebSocketData = undefined, Routes extends str
   desktopIntegration?: DesktopIntegrationOptions
   /** System tray icon with menu. Windows is implemented; see src/runtime/tray.ts for platform status. */
   tray?: DesktopTrayOptions<WebSocketData>
+  /**
+   * Enable system notifications (`context.notify`). Windows delivers WinRT
+   * toasts via a PowerShell bridge; `{ aumid }` attributes the toast to your
+   * AppUserModelID (a Start Menu shortcut carrying the AUMID must exist).
+   */
+  notifications?: boolean | { aumid?: string }
   onReady?: (context: DesktopAppContext<WebSocketData>) => void | Promise<void>
   onSecondInstance?: (
     event: SecondInstanceEvent,
@@ -73,6 +80,7 @@ export interface DesktopAppContext<WebSocketData = undefined> {
   updater: Updater | null
   actions: ActionRegistry
   tray: TrayController<WebSocketData> | null
+  notify(options: DesktopNotificationOptions): Promise<boolean>
   launchWindow(options?: Partial<DesktopWindowOptions>): Promise<Bun.Subprocess | null>
   stop(): Promise<void>
 }
@@ -254,6 +262,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
     }
 
     let tray: TrayController<WebSocketData> | null = null
+    const notificationsAumid = typeof this.options.notifications === 'object' ? this.options.notifications.aumid : undefined
     const context: DesktopAppSession<WebSocketData> = {
       kind: 'primary',
       server,
@@ -262,6 +271,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       updater,
       actions: registry,
       tray,
+      notify: (notification) => notifySystem(notification, { aumid: notificationsAumid }),
       launchWindow: launch,
       stop,
       wait,

@@ -29,7 +29,7 @@ export interface Win32TrayOptions {
 export interface Win32TrayHandle {
   update(options: { icon?: string; tooltip?: string; menu?: Win32TrayItem[] }): void
   destroy(): void
-  /** True when the icon is present in the notification area (Win10+ probe). */
+  /** True when the icon is present in the notification area (Win10+ probe; false while overflowed). */
   iconPresent(): boolean
 }
 
@@ -73,7 +73,6 @@ const WM_TRAY = 0x8001
 const WM_LBUTTONUP = 0x202
 const WM_LBUTTONDBLCLK = 0x203
 const WM_RBUTTONUP = 0x205
-const NIN_SELECT = 0x400
 
 const IMAGE_ICON = 1
 const LR_LOADFROMFILE = 0x10
@@ -187,7 +186,7 @@ export function createWin32Tray(options: Win32TrayOptions): Win32TrayHandle | nu
     (callbackHwnd: number, message: number, _wParam: number | bigint, lParam: number | bigint) => {
       if (Number(message) === WM_TRAY) {
         const event = Number(lParam)
-        if (event === WM_LBUTTONUP || event === WM_LBUTTONDBLCLK || event === NIN_SELECT) {
+        if (event === WM_LBUTTONUP || event === WM_LBUTTONDBLCLK) {
           options.onActivate()
         } else if (event === WM_RBUTTONUP) {
           showMenu()

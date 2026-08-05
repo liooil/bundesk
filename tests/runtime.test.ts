@@ -18,6 +18,7 @@ import {
   renderTermuxBootScript,
   staticBinaryProvider,
   unregisterLinuxIntegration,
+  windowsToastScript,
 } from '../src/index'
 import type { DesktopAppOptions, DesktopAppSession, LinuxIntegrationOptions, SecondInstanceEvent } from '../src/index'
 
@@ -402,6 +403,38 @@ describe('service registration', () => {
     expect(result.ok).toBe(true)
     expect(result.details.some((line) => line.includes('CurrentVersion\\Run'))).toBe(true)
   })
+})
+
+describe('system notifications', () => {
+  it('builds a Windows toast script with the configured AUMID', () => {
+    const script = windowsToastScript('my-company.my-app')
+    expect(script).toContain('ToastNotificationManager')
+    expect(script).toContain('ToastText02')
+    expect(script).toContain('$env:BUN_DESKTOP_TOAST_TITLE')
+    expect(script).toContain("CreateToastNotifier('my-company.my-app')")
+  })
+
+  it.skipIf(process.platform !== 'win32')('delivers a toast through context.notify', async () => {
+    const app = createDesktopApp({
+      id: `runtime-notify-${process.pid}`,
+      server: { port: 0, fetch: () => new Response('ok') },
+      window: false,
+      singleInstance: false,
+      notifications: true,
+    })
+    const session = await app.start([])
+    expect(session.kind).toBe('primary')
+    if (session.kind !== 'primary') throw new Error('Expected a primary session')
+    try {
+      const delivered = await session.notify({
+        title: 'BunDesk test toast',
+        body: 'delivered through context.notify',
+      })
+      expect(delivered).toBe(true)
+    } finally {
+      await session.stop()
+    }
+  }, 30_000)
 })
 
 describe('system tray', () => {
