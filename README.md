@@ -59,6 +59,7 @@ BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要
 - 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调，action 结果可回传；
 - 静态二进制 URL/ETag/SHA-256 和 GitHub Releases 两种升级 provider；
 - 下载校验、原子替换、失败回滚、重启和旧版本清理；
+- 系统托盘（Windows 已实现：纯 bun:ffi 调 Win32，无原生编译）；
 - 服务注册（headless `serve` 常驻）：Windows HKCU Run key、Linux systemd user unit、macOS launchd LaunchAgent、Termux boot 脚本；
 - Windows 当前用户文件关联、默认打开方式和开始菜单快捷方式；
 - Linux XDG 文件关联、desktop entry 和 mimeapps 注册（register/unregister/status）；
@@ -308,6 +309,40 @@ my-app uninstall-service      # 停止并移除
 - `install-service` / `uninstall-service` 支持 `--dry-run` 预览；
 - 服务使用 `WorkingDirectory`/`RunAtLoad`/`Restart=on-failure`/`KeepAlive` 保证崩溃拉起，应用内的相对路径应基于 `process.execPath` 解析而非 cwd。
 
+## 系统托盘
+
+```ts
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  server: { port: 0, routes: { '/': new Response('Hello') } },
+  tray: {
+    icon: 'src/app/tray.ico',   // Windows：.ico 或可执行文件路径；默认系统图标
+    tooltip: 'My App',
+    menu: [
+      { label: '打开主窗口', onClick: (context) => context.launchWindow() },
+      { separator: true },
+      { label: '退出', onClick: (context) => context.stop() },
+    ],
+    onActivate: (context) => context.launchWindow(),  // 左键点击
+  },
+})
+```
+
+- 配置托盘后，关闭窗口默认**不退出**（`exitWithWindow` 默认为 false），应用驻留托盘；托盘菜单里调用 `context.stop()` 退出；
+- 交互回调（`onActivate`、菜单 `onClick`）与 action 一样拿到完整 `context`；
+- 托盘图标可运行期更新：`context.tray?.update({ tooltip: '...', icon: '...' })`，`context.tray?.destroy()` 移除。
+
+平台现状：
+
+| 平台 | 状态 | 机制 |
+| --- | --- | --- |
+| Windows | **已实现** | 纯 `bun:ffi` 调 user32/shell32：`Shell_NotifyIconW` + 隐藏窗口 + 50ms 消息泵，无原生工具链 |
+| macOS | 未实现 | AppKit `NSStatusItem` 经 `objc_msgSend` FFI（需 NSApplication/run-loop 配合，可行但脆弱） |
+| Linux | 未实现 | StatusNotifierItem D-Bus 协议（纯 JS D-Bus 客户端 + DBusMenu） |
+| Termux | 不支持 | Android 无托盘概念 |
+
+Windows 上新注册的图标可能先出现在溢出区（Windows 默认行为），用户拖到主托盘即可；`iconPresent()` 探测对溢出区隐藏图标按文档返回 false。
+
 ## 自动升级
 
 ### 静态发布地址
@@ -413,6 +448,7 @@ https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 | 自动替换当前可执行文件 | 支持 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用 |
 | 文件关联 / launcher | 支持（HKCU） | 支持（XDG） | 构建期 Info.plist | 不支持 |
 | 服务注册（headless serve） | HKCU Run key | systemd user | launchd agent | termux-boot |
+| 系统托盘 | 支持（Win32 FFI） | 计划（SNI D-Bus） | 计划（AppKit FFI） | 不支持 |
 
 Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`windows`/`runtime` 构建选项要求 `bun-windows-*` 目标，`macos` 选项要求 `bun-darwin-*` 目标且 `outfile` 以 `.app` 结尾。
 

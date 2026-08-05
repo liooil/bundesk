@@ -397,6 +397,8 @@ export * from './runtime/paths'
 export * from './runtime/platform'
 export * from './runtime/service-integration'
 export * from './runtime/single-instance'
+export * from './runtime/tray'
+export * from './runtime/tray-win32'
 export * from './runtime/updater'
 export * from './runtime/windows-integration'
 export type {

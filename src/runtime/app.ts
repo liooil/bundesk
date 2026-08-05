@@ -20,6 +20,7 @@ import {
   unregisterLinuxIntegration,
 } from './linux-integration'
 import { getServiceStatus, installService, uninstallService } from './service-integration'
+import { createTray, type DesktopTrayOptions, type TrayController } from './tray'
 import { isTermux } from './platform'
 import {
   getWindowsIntegrationStatus,
@@ -56,6 +57,8 @@ export interface DesktopAppOptions<WebSocketData = undefined, Routes extends str
   actions?: DesktopActionOptions<WebSocketData>[]
   /** File associations and launcher entry; dispatched to the current platform (Windows registry / Linux XDG). */
   desktopIntegration?: DesktopIntegrationOptions
+  /** System tray icon with menu. Windows is implemented; see src/runtime/tray.ts for platform status. */
+  tray?: DesktopTrayOptions<WebSocketData>
   onReady?: (context: DesktopAppContext<WebSocketData>) => void | Promise<void>
   onSecondInstance?: (
     event: SecondInstanceEvent,
@@ -69,6 +72,7 @@ export interface DesktopAppContext<WebSocketData = undefined> {
   window: Bun.Subprocess | null
   updater: Updater | null
   actions: ActionRegistry
+  tray: TrayController<WebSocketData> | null
   launchWindow(options?: Partial<DesktopWindowOptions>): Promise<Bun.Subprocess | null>
   stop(): Promise<void>
 }
@@ -210,6 +214,10 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
 
     let appWindow: Bun.Subprocess | null = null
     let stopped = false
+    let stopResolve: (() => void) | undefined
+    const stoppedPromise = new Promise<void>((resolve) => {
+      stopResolve = resolve
+    })
     const launch = async (overrides: Partial<DesktopWindowOptions> = {}) => {
       if (!windowOptions) return null
       const merged = { ...windowOptions, ...overrides }
@@ -225,22 +233,27 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
     const stop = async () => {
       if (stopped) return
       stopped = true
+      stopResolve?.()
+      tray?.destroy()
       if (appWindow && appWindow.exitCode === null) appWindow.kill()
       await server.stop(true)
       if (instance?.kind === 'primary') await instance.release()
     }
     const wait = async () => {
       const signal = waitForTerminationSignal()
-      const shouldExitWithWindow = (windowOptions?.exitWithWindow ?? true) && !isTermux()
+      // With a tray, closing the window keeps the app alive in the tray unless
+      // exitWithWindow is explicitly enabled.
+      const shouldExitWithWindow = (windowOptions?.exitWithWindow ?? !this.options.tray) && !isTermux()
       if (appWindow && shouldExitWithWindow) {
-        await Promise.race([appWindow.exited.then(() => undefined), signal.promise])
+        await Promise.race([appWindow.exited.then(() => undefined), signal.promise, stoppedPromise])
       } else {
-        await signal.promise
+        await Promise.race([signal.promise, stoppedPromise])
       }
       signal.dispose()
       await stop()
     }
 
+    let tray: TrayController<WebSocketData> | null = null
     const context: DesktopAppSession<WebSocketData> = {
       kind: 'primary',
       server,
@@ -248,6 +261,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       window: appWindow,
       updater,
       actions: registry,
+      tray,
       launchWindow: launch,
       stop,
       wait,
@@ -266,6 +280,35 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       }
       await stop()
       return { kind: 'action', action: actionName, result }
+    }
+
+    if (this.options.tray) {
+      const trayOptions = this.options.tray
+      tray = createTray<WebSocketData>(trayOptions, {
+        onActivate: () => {
+          void (async () => {
+            try {
+              if (trayOptions.onActivate) {
+                await trayOptions.onActivate(context)
+              } else if (!appWindow || appWindow.exitCode !== null) {
+                await launch()
+              }
+            } catch (error) {
+              console.error('[BunDesk] tray activate failed:', error)
+            }
+          })()
+        },
+        onMenuClick: (item) => {
+          void (async () => {
+            try {
+              await item.onClick?.(context)
+            } catch (error) {
+              console.error('[BunDesk] tray menu item failed:', error)
+            }
+          })()
+        },
+      })
+      context.tray = tray
     }
 
     if (windowOptions && parsed.browser && parsed.command !== 'serve') {

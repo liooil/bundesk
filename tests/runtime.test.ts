@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   createDesktopApp,
   createUpdater,
+  createWin32Tray,
   findChromiumBrowser,
   githubReleaseProvider,
   getLinuxIntegrationStatus,
@@ -400,6 +401,30 @@ describe('service registration', () => {
     }, { dryRun: true })
     expect(result.ok).toBe(true)
     expect(result.details.some((line) => line.includes('CurrentVersion\\Run'))).toBe(true)
+  })
+})
+
+describe('system tray', () => {
+  it.skipIf(process.platform !== 'win32')('adds and removes a tray icon through the Win32 FFI path', async () => {
+    let activated = 0
+    let menuClicks = 0
+    const handle = createWin32Tray({
+      tooltip: 'BunDesk test tray',
+      menu: [{ label: 'Item A' }, { separator: true }, { label: 'Item B' }],
+      onActivate: () => {
+        activated++
+      },
+      onMenuClick: () => {
+        menuClicks++
+      },
+    })
+    expect(handle).not.toBeNull()
+    if (!handle) throw new Error('Expected the tray to be created on Windows')
+    handle.update({ tooltip: 'BunDesk test tray v2' })
+    handle.destroy()
+    handle.destroy() // idempotent
+    expect(activated).toBe(0)
+    expect(menuClicks).toBe(0)
   })
 })
 
