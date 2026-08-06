@@ -2,10 +2,12 @@ import { cc, CString, dlopen, JSCallback, ptr, type Pointer } from 'bun:ffi'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-// Both native assets ship as real files; `bun build --compile` embeds them into
-// the single binary, and the import resolves to the embedded file path.
+// The shim ships as a real file; `bun build --compile` embeds it into the
+// single binary, and the import resolves to the embedded file path. The
+// WebView2Loader.dll is provisioned on demand (NuGet download, cached) and
+// resolved through a global plugin — see webview2-loader.ts.
 import shimPath from '../webview2-shim.c' with { type: 'file' }
-import loaderFile from '../webview2-loader.dll' with { type: 'file' }
+import { ensureWebView2Loader } from './webview2-loader'
 
 /**
  * cc() and LoadLibrary() need a real native path. Dev runs resolve to the repo
@@ -156,6 +158,12 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
   const width = options.width ?? 900
   const height = options.height ?? 640
   const userDataFolder = options.userDataFolder ?? join(tmpdir(), `bundesk-webview2-data-${process.pid}`)
+
+  // Must stay dynamic: the plugin that resolves the DLL import is registered
+  // above, and static imports are resolved before the module body runs, so
+  // they would miss the plugin.
+  await ensureWebView2Loader()
+  const { default: loaderFile } = await import('../webview2-loader.dll', { with: { type: 'file' } })
 
   let resolveReady: (() => void) | undefined
   let rejectReady: ((error: Error) => void) | undefined
