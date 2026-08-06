@@ -2,10 +2,24 @@ import { cc, CString, dlopen, JSCallback, ptr, type Pointer } from 'bun:ffi'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import shimSource from '../webview2-shim.c' with { type: 'text' }
-// The loader DLL ships as a real file; `bun build --compile` embeds it into the
-// single binary (asset), and the import resolves to the embedded file path.
+// Both native assets ship as real files; `bun build --compile` embeds them into
+// the single binary, and the import resolves to the embedded file path.
+import shimPath from '../webview2-shim.c' with { type: 'file' }
 import loaderFile from '../webview2-loader.dll' with { type: 'file' }
+
+/**
+ * cc() and LoadLibrary() need a real native path. Dev runs resolve to the repo
+ * file and are passed through untouched; compiled single binaries resolve to
+ * Bun's embedded virtual filesystem (B:/~BUN/...) which only Bun.file can
+ * read, so those bytes are materialized to a real temp file.
+ */
+async function materializeNativePath(importedPath: string, tempName: string): Promise<string> {
+  if (!importedPath.startsWith('B:/~BUN/')) return importedPath
+  const bytes = new Uint8Array(await Bun.file(importedPath).arrayBuffer())
+  const realPath = join(tmpdir(), tempName)
+  await writeFile(realPath, bytes)
+  return realPath
+}
 
 /**
  * WebView2 window provider (Windows) — SPIKE status.
@@ -80,8 +94,7 @@ function utf16(value: string): Buffer {
 async function loadShim(): Promise<ShimSymbols> {
   if (!shimPromise) {
     shimPromise = (async () => {
-      const sourcePath = join(tmpdir(), `bundesk-webview2-shim-${process.pid}.c`)
-      await writeFile(sourcePath, shimSource, 'utf8')
+      const sourcePath = await materializeNativePath(shimPath, `bundesk-webview2-shim-${process.pid}.c`)
       const library = cc({
         source: sourcePath,
         library: ['kernel32', 'user32', 'ole32', 'advapi32', 'psapi'],
@@ -202,9 +215,7 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
     closeCallback.ptr as unknown as number,
   )
 
-  const loaderBytes = new Uint8Array(await Bun.file(loaderFile).arrayBuffer())
-  const loaderPath = join(tmpdir(), `bundesk-webview2-loader-${process.pid}.dll`)
-  await writeFile(loaderPath, loaderBytes)
+  const loaderPath = await materializeNativePath(loaderFile, `bundesk-webview2-loader-${process.pid}.dll`)
 
   shim.wv_init()
   if (!shim.wv_use_loader(ptr(utf16(loaderPath)))) {
