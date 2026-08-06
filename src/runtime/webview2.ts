@@ -37,8 +37,12 @@ async function materializeNativePath(importedPath: string, tempName: string): Pr
  * <base>\EBWebView\x64\EmbeddedBrowserWebView.dll and calls its undocumented
  * CreateWebViewEnvironmentWithOptionsInternal export directly with the
  * 5-argument (bool, runtimeType, userDataDir, options, handler) signature
- * cross-checked against jchv/OpenWebView2Loader. Accepted risk: an export
- * rename in a future runtime breaks discovery.
+ * cross-checked against jchv/OpenWebView2Loader. This is the SAME dependency
+ * the official loader has — its entire env-creation path is a GetProcAddress
+ * on this export plus a direct call, with no fallback. The export is
+ * undocumented but de-facto ABI-stable: Microsoft cannot change it without
+ * breaking every already-deployed loader in the wild, so a frozen binary
+ * fails identically whether it embeds the loader or this shim.
  *
  * Verified working (2026-08-06, Windows 11, Edge-unified runtime 151.0.4129.59,
  * no loader DLL anywhere in the process):

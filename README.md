@@ -410,10 +410,13 @@ const app = createDesktopApp({
 - Implementation: a header-free C shim (COM vtable layouts verified against the
   official WebView2.h) compiled at runtime by Bun's embedded TinyCC. The
   official WebView2Loader.dll is deliberately not used: the shim reads the
-  runtime version from the EdgeUpdate registry key and calls
+  runtime install path from the EdgeUpdate registry key and calls
   `CreateWebViewEnvironmentWithOptionsInternal` in
-  `EmbeddedBrowserWebView.dll` directly (undocumented, accepted risk) — no
-  native toolchain, no downloaded binaries, single-binary build preserved.
+  `EmbeddedBrowserWebView.dll` directly. That export is undocumented but
+  de-facto ABI-stable — it is the exact dependency the official loader uses
+  (its env-creation path is GetProcAddress on this export plus a direct call),
+  so a frozen binary fails identically either way — no native toolchain, no
+  downloaded binaries, single-binary build preserved.
 - Pages served by the app must set a real `content-type` (`text/html`); without
   it the page renders as plain text.
 - WebView2 windows are Windows-only; `window.provider = 'webview'` throws on

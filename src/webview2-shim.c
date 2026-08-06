@@ -214,7 +214,8 @@ static char* to_utf8(const wchar_t* w) {
   return g_utf8buf;
 }
 
-/* CreateWebViewEnvironmentWithOptionsInternal (undocumented):
+/* CreateWebViewEnvironmentWithOptionsInternal (undocumented; de-facto stable,
+ * same dependency the official loader has):
  *   HRESULT (bool unknown, WebView2RunTimeType runtimeType, PCWSTR userDataDir,
  *            IUnknown* environmentOptions, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)
  * Cross-checked against jchv/OpenWebView2Loader. `unknown` is passed as true
@@ -284,10 +285,11 @@ static void* handler_vtbl(int kind) {
 /*
  * The unified WebView2 runtime hosts from
  * <runtime>\EBWebView\x64\EmbeddedBrowserWebView.dll and exports the
- * environment-creation entry as `CreateWebViewEnvironmentWithOptionsInternal`
- * — an unstable, undocumented export (the official loader wraps it). We call
- * it directly, accepting the unofficial status; only an export rename would
- * break it.
+ * environment-creation entry as `CreateWebViewEnvironmentWithOptionsInternal`.
+ * It is undocumented but de-facto ABI-stable: the official loader's entire
+ * env-creation path is GetProcAddress on this export plus a direct call, so
+ * we share the loader's exact dependency — a frozen binary fails identically
+ * whether it embeds the loader or this shim.
  *
  * Discovery mirrors the official loader (jchv/OpenWebView2Loader documents
  * the same logic; the loader binary itself is not reverse-engineered):

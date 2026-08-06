@@ -10,5 +10,7 @@ The runtime is discovered WITHOUT the official WebView2Loader.dll: the shim read
 version from the EdgeUpdate Clients registry key
 (`{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}`), locates
 `<runtime>\EBWebView\x64\EmbeddedBrowserWebView.dll`, and calls its
-`CreateWebViewEnvironmentWithOptionsInternal` export directly. That export is undocumented and
-unstable — accepted trade-off for not shipping or downloading any loader binary.
+`CreateWebViewEnvironmentWithOptionsInternal` export directly. That export is undocumented but
+de-facto ABI-stable — it is the exact dependency the official loader uses (its env-creation
+path is GetProcAddress on this export plus a direct call), so this approach carries no
+stability delta versus shipping the loader binary.
