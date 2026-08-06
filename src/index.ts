@@ -401,6 +401,7 @@ export * from './runtime/single-instance'
 export * from './runtime/tray'
 export * from './runtime/tray-win32'
 export * from './runtime/updater'
+export * from './runtime/webview2'
 export * from './runtime/windows-integration'
 export type {
   DesktopMacosOptions,

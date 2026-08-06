@@ -377,6 +377,45 @@ Known trade-offs:
 - by default the toast shows "Windows PowerShell" as the source name; after configuring `{ aumid }` and creating a Start Menu shortcut with that AUMID, toasts appear under your app's name;
 - click callbacks need toast activation (launch arguments + foreground activation), on the roadmap.
 
+## WebView2 windows (Windows)
+
+Besides launching the system browser in App Mode, a window can be hosted
+in-process by WebView2 (the system WebView2 Runtime / Edge-unified runtime —
+nothing is bundled):
+
+```ts
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  server: {
+    port: 0,
+    routes: { '/': new Response('<h1>Hello</h1>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
+  },
+  window: {
+    provider: 'webview',          // 'browser' (default) or 'webview'
+    path: '/',
+    width: 900,
+    height: 640,
+    title: 'My App',
+    onMessage: (message) => console.log('page says:', message),
+    onNavigateCompleted: ({ success, errorStatus }) => console.log('navigated:', success, errorStatus),
+  },
+})
+```
+
+- The page communicates with the app over `window.chrome.webview.postMessage`
+  (messages arrive in `onMessage`); the window handle (`context.window`) adds
+  `executeScript`, `postMessage` and `navigate` on top of the `Bun.Subprocess`
+  surface.
+- The WebView2 user-data folder defaults to `<appData>/WebView2`.
+- Implementation: a header-free C shim (COM vtable layouts verified against the
+  official WebView2.h) compiled at runtime by Bun's embedded TinyCC, plus the
+  official WebView2Loader.dll embedded as a build asset — no native toolchain,
+  single-binary build preserved.
+- Pages served by the app must set a real `content-type` (`text/html`); without
+  it the page renders as plain text.
+- WebView2 windows are Windows-only; `window.provider = 'webview'` throws on
+  other platforms.
+
 ## Automatic updates
 
 ### Static release URL

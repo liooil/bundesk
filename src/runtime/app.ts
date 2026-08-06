@@ -4,7 +4,11 @@ import type { UpdateCheckResult, Updater, UpdaterOptions } from './updater'
 import type { WindowsIntegrationOptions, WindowsIntegrationResult, WindowsIntegrationStatus } from './windows-integration'
 import type { ActionRegistry, DesktopActionOptions } from './actions'
 import type { LinuxIntegrationOptions } from './linux-integration'
+import type { WebViewWindow } from './webview2'
+import { join } from 'node:path'
 import { launchAppWindow } from './browser'
+import { getAppDataDirectory } from './paths'
+import { createWebViewWindow } from './webview2'
 import { acquireSingleInstance } from './single-instance'
 import { cleanupAfterUpdate, createUpdater } from './updater'
 import {
@@ -31,9 +35,21 @@ import {
 
 export type DesktopIntegrationOptions = WindowsIntegrationOptions
 
+export type DesktopAppWindow = Bun.Subprocess | WebViewWindow
+
 export interface DesktopWindowOptions extends Omit<AppWindowOptions, 'appId' | 'url'> {
   path?: string
   exitWithWindow?: boolean
+  /** 'browser' (default) launches the system browser in App Mode; 'webview' uses the in-process WebView2 window (Windows only). */
+  provider?: 'browser' | 'webview'
+  /** WebView2 provider: initial window size and title. */
+  width?: number
+  height?: number
+  title?: string
+  /** WebView2 provider: page-initiated messages (window.chrome.webview.postMessage). */
+  onMessage?: (message: unknown) => void
+  /** WebView2 provider: navigation completion. */
+  onNavigateCompleted?: (info: { success: boolean; errorStatus: number }) => void
 }
 
 export interface DesktopUpdateOptions extends UpdaterOptions {
@@ -76,12 +92,12 @@ export interface DesktopAppOptions<WebSocketData = undefined, Routes extends str
 export interface DesktopAppContext<WebSocketData = undefined> {
   server: Bun.Server<WebSocketData>
   url: URL
-  window: Bun.Subprocess | null
+  window: DesktopAppWindow | null
   updater: Updater | null
   actions: ActionRegistry
   tray: TrayController<WebSocketData> | null
   notify(options: DesktopNotificationOptions): Promise<boolean>
-  launchWindow(options?: Partial<DesktopWindowOptions>): Promise<Bun.Subprocess | null>
+  launchWindow(options?: Partial<DesktopWindowOptions>): Promise<DesktopAppWindow | null>
   stop(): Promise<void>
 }
 
@@ -220,7 +236,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
     const windowOptions = this.options.window === false ? null : this.options.window ?? {}
     if (windowOptions?.path) appUrl.pathname = windowOptions.path.startsWith('/') ? windowOptions.path : `/${windowOptions.path}`
 
-    let appWindow: Bun.Subprocess | null = null
+    let appWindow: DesktopAppWindow | null = null
     let stopped = false
     let stopResolve: (() => void) | undefined
     const stoppedPromise = new Promise<void>((resolve) => {
@@ -231,11 +247,26 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       const merged = { ...windowOptions, ...overrides }
       const windowUrl = new URL(appUrl)
       if (merged.path) windowUrl.pathname = merged.path.startsWith('/') ? merged.path : `/${merged.path}`
-      appWindow = await launchAppWindow({
-        ...merged,
-        appId: this.options.id,
-        url: windowUrl,
-      })
+      if (merged.provider === 'webview') {
+        if (process.platform !== 'win32') {
+          throw new Error('The webview window provider is only available on Windows')
+        }
+        appWindow = await createWebViewWindow({
+          url: String(windowUrl),
+          title: merged.title,
+          width: merged.width,
+          height: merged.height,
+          userDataFolder: merged.userDataDir ?? join(getAppDataDirectory(this.options.id), 'WebView2'),
+          onMessage: merged.onMessage,
+          onNavigateCompleted: merged.onNavigateCompleted,
+        })
+      } else {
+        appWindow = await launchAppWindow({
+          ...merged,
+          appId: this.options.id,
+          url: windowUrl,
+        })
+      }
       return appWindow
     }
     const stop = async () => {

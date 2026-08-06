@@ -437,6 +437,50 @@ describe('system notifications', () => {
   }, 30_000)
 })
 
+describe('webview2 window provider', () => {
+  it.skipIf(process.platform !== 'win32')('opens a WebView2 window and executes script in it', async () => {
+    // The initial about:blank load does not fire NavigationCompleted; the
+    // first completion is the app URL, which is when the DOM is queryable.
+    let resolveNavigated: ((info: { success: boolean; errorStatus: number }) => void) | undefined
+    const navigated = new Promise<{ success: boolean; errorStatus: number }>((resolve) => {
+      resolveNavigated = resolve
+    })
+    const app = createDesktopApp({
+      id: `runtime-webview-${process.pid}`,
+      server: {
+        port: 0,
+        fetch: () => new Response('<html><body><h1>webview-test</h1></body></html>', {
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        }),
+      },
+      window: {
+        provider: 'webview',
+        path: '/',
+        width: 480,
+        height: 320,
+        title: 'WebView2 test',
+        onNavigateCompleted: (info) => resolveNavigated?.(info),
+      },
+      singleInstance: false,
+    })
+    const session = await app.start([])
+    expect(session.kind).toBe('primary')
+    if (session.kind !== 'primary') throw new Error('Expected a primary session')
+    try {
+      expect(session.window).not.toBeNull()
+      const window = session.window
+      if (!window) throw new Error('Expected a window')
+      if (!('executeScript' in window)) throw new Error('Expected a WebView2 window from the webview provider')
+      const navigation = await navigated
+      expect(navigation.success).toBe(true)
+      const heading = await window.executeScript('document.querySelector("h1").textContent')
+      expect(heading).toBe('webview-test')
+    } finally {
+      await session.stop()
+    }
+  }, 60_000)
+})
+
 describe('system tray', () => {
   it.skipIf(process.platform !== 'win32')('adds and removes a tray icon through the Win32 FFI path', async () => {
     let activated = 0

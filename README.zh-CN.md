@@ -377,6 +377,35 @@ await context.notify({
 - 默认 toast 以 "Windows PowerShell" 为来源名；配置 `{ aumid }` 并以该 AUMID 创建开始菜单快捷方式后，toast 以你的应用名义出现；
 - 点击回调需要 toast activation（启动参数 + 前台激活），列入 roadmap。
 
+## WebView2 窗口（Windows）
+
+除了用系统浏览器打开 App Mode 窗口外，窗口也可以由 WebView2 进程内托管（使用系统 WebView2 Runtime / Edge 统一运行时，不捆绑任何东西）：
+
+```ts
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  server: {
+    port: 0,
+    routes: { '/': new Response('<h1>Hello</h1>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
+  },
+  window: {
+    provider: 'webview',          // 'browser'（默认）或 'webview'
+    path: '/',
+    width: 900,
+    height: 640,
+    title: 'My App',
+    onMessage: (message) => console.log('page says:', message),
+    onNavigateCompleted: ({ success, errorStatus }) => console.log('navigated:', success, errorStatus),
+  },
+})
+```
+
+- 页面通过 `window.chrome.webview.postMessage` 与应用通信（消息到达 `onMessage`）；窗口句柄（`context.window`）在 `Bun.Subprocess` 表面之上额外提供 `executeScript`、`postMessage` 与 `navigate`。
+- WebView2 用户数据目录默认为 `<appData>/WebView2`。
+- 实现：无头文件 C shim（COM vtable 布局对照官方 WebView2.h 校验）由 Bun 内嵌 TinyCC 运行时编译，官方 WebView2Loader.dll 作为构建资产内嵌——无原生工具链，单二进制构建保留。
+- 应用提供的页面必须设置真实的 `content-type`（`text/html`）；否则页面按纯文本渲染。
+- WebView2 窗口仅 Windows；其他平台设置 `window.provider = 'webview'` 会抛错。
+
 ## 自动升级
 
 ### 静态发布地址

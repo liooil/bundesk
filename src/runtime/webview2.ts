@@ -46,7 +46,9 @@ async function materializeNativePath(importedPath: string, tempName: string): Pr
  *
  * Remaining notes: `bun build --compile` embeds the .c/.dll assets into the
  * single binary (verified). close() skips controller Close() (can crash when
- * the runtime is torn down); fine for the spike.
+ * the runtime is torn down); fine for the spike. Pages served by the app must
+ * set a real `content-type` (e.g. `text/html`) — without it the page renders
+ * as plain text and the DOM is not queryable.
  */
 
 export interface WebViewWindowOptions {
@@ -61,10 +63,16 @@ export interface WebViewWindowOptions {
 }
 
 export interface WebViewWindow {
+  /** Null while the window is open; set on close (Bun.Subprocess-compatible). */
+  exitCode: number | null
+  /** Resolves when the window is closed (Bun.Subprocess-compatible). */
+  exited: Promise<void>
+  /** Close the window (Bun.Subprocess-compatible alias). */
+  kill(): void
+  close(): void
   navigate(url: string): void
   postMessage(value: unknown): void
   executeScript(script: string): Promise<unknown>
-  close(): void
 }
 
 interface ShimSymbols {
@@ -232,7 +240,28 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
   await ready
 
   let closed = false
+  let exitCode: number | null = null
+  let resolveExited: (() => void) | undefined
+  const exited = new Promise<void>((resolve) => {
+    resolveExited = resolve
+  })
+  const closeWindow = () => {
+    if (closed) return
+    closed = true
+    exitCode = 0
+    resolveExited?.()
+    shim.wv_close()
+    stopPump()
+    envCallback.close()
+    ctrlCallback.close()
+    messageCallback.close()
+    navCallback.close()
+    execCallback.close()
+    closeCallback.close()
+  }
   return {
+    exitCode,
+    exited,
     navigate(url: string) {
       shim.wv_navigate(ptr(utf16(url)))
     },
@@ -246,17 +275,7 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
       shim.wv_execute_script(ptr(utf16(script)))
       return result
     },
-    close() {
-      if (closed) return
-      closed = true
-      shim.wv_close()
-      stopPump()
-      envCallback.close()
-      ctrlCallback.close()
-      messageCallback.close()
-      navCallback.close()
-      execCallback.close()
-      closeCallback.close()
-    },
+    kill: closeWindow,
+    close: closeWindow,
   }
 }
