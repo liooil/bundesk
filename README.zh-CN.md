@@ -410,7 +410,7 @@ const app = createDesktopApp({
 | 平台 | 进程内 provider | 状态 | 机制 |
 | --- | --- | --- | --- |
 | Windows | `webview`（WebView2） | **已实现** | 内嵌 TinyCC 编译的 C shim；直调运行时 `EmbeddedBrowserWebView.dll`（无 loader 二进制） |
-| Linux | `webkit`（WebKitGTK） | 规划中，未实现 | `webkit2gtk-4.1` C API shim，同一 TinyCC 模式（`evaluate_javascript` → `executeScript`，`script-message-received` → `onMessage`）；需系统装有 `libwebkit2gtk-4.1`，否则回落到 `browser` |
+| Linux | `webkit`（WebKitGTK） | **已实现** | `webkit2gtk-4.1` C API shim，内嵌 TinyCC 编译（`run_javascript` → `executeScript`，`script-message-received` → `onMessage`）；GTK3/GTK4 两种 webkit 构建均支持（运行时探测底座）；需系统装有 WebKitGTK 栈（如 `pacman -S webkit2gtk-4.1` / `apt install libwebkit2gtk-4.1-0`），否则回落到 `browser`；WSLg 下需设 `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`（GPU 初始化失败时再加 `LIBGL_ALWAYS_SOFTWARE=1`） |
 | macOS | `wkwebview`（WKWebView） | 未实现 | `objc_msgSend` FFI shim；可行但最脆弱（ObjC block、NSApplication run loop） |
 | Termux | — | 不支持 | Android 无 shell 进程可用的 WebView API；嵌入式 WebView 需构建 APK。VIEW intent（`browser`）是既定路径 |
 

@@ -426,7 +426,7 @@ and launches the system browser in App Mode):
 | Platform | In-process provider | Status | Mechanism |
 | --- | --- | --- | --- |
 | Windows | `webview` (WebView2) | **Implemented** | C shim compiled by embedded TinyCC; direct call into the runtime's `EmbeddedBrowserWebView.dll` (no loader binary) |
-| Linux | `webkit` (WebKitGTK) | Planned, not implemented | `webkit2gtk-4.1` C API shim, same TinyCC pattern (`evaluate_javascript` → `executeScript`, `script-message-received` → `onMessage`); requires `libwebkit2gtk-4.1` installed, falls back to `browser` otherwise |
+| Linux | `webkit` (WebKitGTK) | **Implemented** | `webkit2gtk-4.1` C API shim compiled by embedded TinyCC (`run_javascript` → `executeScript`, `script-message-received` → `onMessage`); GTK3 and GTK4 webkit builds both supported (base detected at runtime); requires the WebKitGTK stack installed (e.g. `pacman -S webkit2gtk-4.1` / `apt install libwebkit2gtk-4.1-0`), falls back to `browser` otherwise; in WSLg set `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1` (plus `LIBGL_ALWAYS_SOFTWARE=1` if the GPU init fails) |
 | macOS | `wkwebview` (WKWebView) | Not implemented | `objc_msgSend` FFI shim; feasible but the most fragile (ObjC blocks, NSApplication run loop) |
 | Termux | — | Not supported | Android has no shell-process WebView API; embedded WebView needs an APK. VIEW intent (`browser`) is the intended path |
 

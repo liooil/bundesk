@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { launchAppWindow } from './browser'
 import { getAppDataDirectory } from './paths'
 import { createWebViewWindow } from './webview2'
+import { createWebKitWindow } from './webkit'
 import { acquireSingleInstance } from './single-instance'
 import { cleanupAfterUpdate, createUpdater } from './updater'
 import {
@@ -40,15 +41,15 @@ export type DesktopAppWindow = Bun.Subprocess | WebViewWindow
 export interface DesktopWindowOptions extends Omit<AppWindowOptions, 'appId' | 'url'> {
   path?: string
   exitWithWindow?: boolean
-  /** 'browser' (default) launches the system browser in App Mode; 'webview' uses the in-process WebView2 window (Windows only). */
-  provider?: 'browser' | 'webview'
-  /** WebView2 provider: initial window size and title. */
+  /** 'browser' (default) launches the system browser in App Mode; 'webview' uses the in-process WebView2 window (Windows only); 'webkit' uses the in-process WebKitGTK window (Linux only). */
+  provider?: 'browser' | 'webview' | 'webkit'
+  /** In-process providers ('webview'/'webkit'): initial window size and title. */
   width?: number
   height?: number
   title?: string
-  /** WebView2 provider: page-initiated messages (window.chrome.webview.postMessage). */
+  /** In-process providers: page-initiated messages (window.chrome.webview.postMessage). */
   onMessage?: (message: unknown) => void
-  /** WebView2 provider: navigation completion. */
+  /** In-process providers: navigation completion. */
   onNavigateCompleted?: (info: { success: boolean; errorStatus: number }) => void
 }
 
@@ -257,6 +258,18 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
           width: merged.width,
           height: merged.height,
           userDataFolder: merged.userDataDir ?? join(getAppDataDirectory(this.options.id), 'WebView2'),
+          onMessage: merged.onMessage,
+          onNavigateCompleted: merged.onNavigateCompleted,
+        })
+      } else if (merged.provider === 'webkit') {
+        if (process.platform !== 'linux') {
+          throw new Error('The webkit window provider is only available on Linux')
+        }
+        appWindow = await createWebKitWindow({
+          url: String(windowUrl),
+          title: merged.title,
+          width: merged.width,
+          height: merged.height,
           onMessage: merged.onMessage,
           onNavigateCompleted: merged.onNavigateCompleted,
         })

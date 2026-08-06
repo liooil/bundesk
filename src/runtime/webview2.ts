@@ -1,24 +1,10 @@
 import { cc, CString, dlopen, JSCallback, ptr, type Pointer } from 'bun:ffi'
-import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // The shim ships as a real file; `bun build --compile` embeds it into the
 // single binary, and the import resolves to the embedded file path.
 import shimPath from '../webview2-shim.c' with { type: 'file' }
-
-/**
- * cc() and LoadLibrary() need a real native path. Dev runs resolve to the repo
- * file and are passed through untouched; compiled single binaries resolve to
- * Bun's embedded virtual filesystem (B:/~BUN/...) which only Bun.file can
- * read, so those bytes are materialized to a real temp file.
- */
-async function materializeNativePath(importedPath: string, tempName: string): Promise<string> {
-  if (!importedPath.startsWith('B:/~BUN/')) return importedPath
-  const bytes = new Uint8Array(await Bun.file(importedPath).arrayBuffer())
-  const realPath = join(tmpdir(), tempName)
-  await writeFile(realPath, bytes)
-  return realPath
-}
+import { materializeNativePath } from './native-assets'
 
 /**
  * WebView2 window provider (Windows).
@@ -142,21 +128,38 @@ async function loadShim(): Promise<ShimSymbols> {
   return shimPromise
 }
 
-const user32 = dlopen('user32.dll', {
-  PeekMessageW: { args: ['ptr', 'ptr', 'u32', 'u32', 'u32'], returns: 'i32' },
-  TranslateMessage: { args: ['ptr'], returns: 'i32' },
-  DispatchMessageW: { args: ['ptr'], returns: 'i64' },
-})
+let user32: {
+  symbols: {
+    PeekMessageW(message: Pointer, hwnd: Pointer | null, min: number, max: number, remove: number): number
+    TranslateMessage(message: Pointer): number
+    DispatchMessageW(message: Pointer): number
+  }
+} | null = null
+
+// Lazy: this module is imported on every platform (index.ts re-exports it),
+// and dlopen('user32.dll') must not run outside Windows. The cast is needed
+// because dlopen's generic return type cannot express these callable shapes.
+function pumpSymbols() {
+  if (!user32) {
+    user32 = dlopen('user32.dll', {
+      PeekMessageW: { args: ['ptr', 'ptr', 'u32', 'u32', 'u32'], returns: 'i32' },
+      TranslateMessage: { args: ['ptr'], returns: 'i32' },
+      DispatchMessageW: { args: ['ptr'], returns: 'i64' },
+    }) as unknown as NonNullable<typeof user32>
+  }
+  return user32.symbols
+}
 
 let pump: Timer | undefined
 
 function startPump(): void {
   if (pump) return
   pump = setInterval(() => {
+    const s = pumpSymbols()
     const message = Buffer.alloc(40)
-    while (user32.symbols.PeekMessageW(ptr(message), null, 0, 0, 1)) {
-      user32.symbols.TranslateMessage(ptr(message))
-      user32.symbols.DispatchMessageW(ptr(message))
+    while (s.PeekMessageW(ptr(message), null, 0, 0, 1)) {
+      s.TranslateMessage(ptr(message))
+      s.DispatchMessageW(ptr(message))
     }
   }, 25)
 }

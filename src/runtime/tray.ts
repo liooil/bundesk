@@ -1,6 +1,7 @@
 import type { DesktopAppContext } from './app'
 import { isTermux } from './platform'
-import { createWin32Tray, type Win32TrayHandle } from './tray-win32'
+import type { Win32TrayHandle } from './tray-win32'
+import { createWin32Tray } from './tray-win32'
 
 /**
  * System tray support.
