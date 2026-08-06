@@ -2,13 +2,16 @@
  * webview2-shim.c — header-free WebView2 COM host for bundesk.
  *
  * Compiled at runtime by bun:ffi's embedded TinyCC (`cc`), linked against
- * kernel32/user32/ole32/advapi32. All COM interfaces are hand-declared with
- * vtable layouts verified against the official WebView2.h (Microsoft.Web.WebView2
- * NuGet, 1.0.2957.106). Only the bounded slice used by the framework is
+ * kernel32/user32/ole32. All COM interfaces are hand-declared with vtable
+ * layouts verified against the official WebView2.h (Microsoft.Web.WebView2
+ * NuGet, 1.0.4129.50). Only the bounded slice used by the framework is
  * declared; never call a slot beyond the declared struct size.
  *
  * Conventions: x64 Windows has a single calling convention, so no __stdcall
- * is needed (tinycc rejects the keyword anyway).
+ * is needed (tinycc rejects the keyword anyway). Objects we hold past a
+ * completed callback MUST be AddRef'd — the loader releases its own
+ * references after each completed handler, which otherwise leaves the
+ * environment/controller dangling and silently breaks the browser spawn.
  */
 
 typedef long HRESULT;
@@ -26,10 +29,8 @@ typedef unsigned short wchar_t; /* Windows wchar_t is 16-bit; C has no builtin *
 #define WM_SIZE 0x0005
 #define WM_CLOSE 0x0010
 #define SW_SHOW 5
-#define KEY_READ 0x20019
-#define HKEY_LOCAL_MACHINE ((void*)0x80000002)
 
-/* ---- kernel32 / user32 / ole32 / advapi32 externs ---- */
+/* ---- kernel32 / user32 / ole32 externs ---- */
 extern void* LoadLibraryW(const wchar_t*);
 extern void* GetProcAddress(void*, const char*);
 extern void* GetModuleHandleW(const wchar_t*);
@@ -276,9 +277,9 @@ static void* handler_vtbl(int kind) {
 /* ---- runtime discovery via the official WebView2Loader.dll ---- */
 /*
  * The WebView2 runtime no longer ships WebView2.dll at a discoverable path
- * (Edge-unified runtimes are hosted by msedgewebview2.exe), so hand-rolled
- * registry lookup is not viable. The SDK's WebView2Loader.dll does the whole
- * discovery; bundesk embeds it (base64) and extracts it at runtime.
+ * (Edge-unified runtimes host from EBWebView\x64\EmbeddedBrowserWebView.dll),
+ * so hand-rolled registry lookup is not viable. The SDK's WebView2Loader.dll
+ * does the whole discovery; bundesk embeds it and extracts it at runtime.
  */
 int wv_use_loader(const wchar_t* loaderPath) {
   HMODULE mod = LoadLibraryW(loaderPath);
@@ -289,9 +290,9 @@ int wv_use_loader(const wchar_t* loaderPath) {
 
 /* ---- window + controller + webview state ---- */
 static HWND g_hwnd;
+static ICoreWebView2Environment* g_env;
 static ICoreWebView2Controller* g_ctrl;
 static ICoreWebView2* g_wv;
-static int g_pump_msgs;
 
 static long wnd_proc(HWND hwnd, unsigned int msg, void* wp, void* lp) {
   if (msg == WM_SIZE) {
@@ -353,14 +354,20 @@ long wv_create_environment(const wchar_t* userDataFolder) {
 }
 
 long wv_create_controller(void* env, HWND hwnd) {
-  return ((ICoreWebView2Environment*)env)->lpVtbl->CreateCoreWebView2Controller(
-    (ICoreWebView2Environment*)env, hwnd, ctrl_handler_obj);
+  /* Keep the environment alive: the loader releases its reference after the
+   * completed callback, leaving the pointer dangling without AddRef. */
+  g_env = (ICoreWebView2Environment*)env;
+  if (g_env) g_env->lpVtbl->AddRef(g_env);
+  return g_env->lpVtbl->CreateCoreWebView2Controller(
+    g_env, hwnd, ctrl_handler_obj);
 }
 
 long wv_setup(void* ctrl) {
   g_ctrl = (ICoreWebView2Controller*)ctrl;
+  if (g_ctrl) g_ctrl->lpVtbl->AddRef(g_ctrl);
   long hr = g_ctrl->lpVtbl->put_IsVisible(g_ctrl, 1);
   hr = g_ctrl->lpVtbl->get_CoreWebView2(g_ctrl, (void**)&g_wv);
+  if (g_wv) g_wv->lpVtbl->AddRef(g_wv);
   hr = g_wv->lpVtbl->add_WebMessageReceived(g_wv, msg_handler_obj, 0);
   hr = g_wv->lpVtbl->add_NavigationCompleted(g_wv, nav_handler_obj, 0);
   return hr;
@@ -378,51 +385,6 @@ void wv_execute_script(const wchar_t* js) {
   if (g_wv) g_wv->lpVtbl->ExecuteScript(g_wv, js, exec_handler_obj);
 }
 
-char* wv_diag_source(void) {
-  if (!g_wv) return (char*)"(no webview)";
-  wchar_t* src = 0;
-  long hr = g_wv->lpVtbl->get_Source(g_wv, &src);
-  if (hr != 0 || !src) return (char*)"(get_Source failed)";
-  return to_utf8(src);
-}
-
-extern void* GetCurrentProcess(void);
-extern int EnumProcessModulesEx(void*, void*, unsigned long, unsigned long*, unsigned long);
-extern unsigned long GetModuleFileNameExW(void*, void*, wchar_t*, unsigned long);
-
-char* wv_diag_modules(void) {
-  void* modules[512];
-  unsigned long needed = 0;
-  if (!EnumProcessModulesEx(GetCurrentProcess(), modules, sizeof(modules), &needed, 3)) return (char*)"(enum failed)";
-  int count = needed / (unsigned long)sizeof(void*);
-  int i;
-  for (i = 0; i < count && i < 512; i++) {
-    wchar_t path[512];
-    if (GetModuleFileNameExW(GetCurrentProcess(), modules[i], path, 512) == 0) continue;
-    /* crude 'contains Edge or WebView' check on the wide string */
-    int j;
-    for (j = 0; path[j] && j < 500; j++) {
-      if ((path[j] == 'E' || path[j] == 'e') && path[j+1] == 'd' && path[j+2] == 'g' && path[j+3] == 'e') {
-        return to_utf8(path);
-      }
-    }
-  }
-  return (char*)"(no Edge/WebView module loaded)";
-}
-
-long wv_diag_navstring(const wchar_t* html) {
-  if (!g_wv) return -1;
-  return g_wv->lpVtbl->NavigateToString(g_wv, html);
-}
-
-long wv_diag_watch_events(void) {
-  if (!g_wv) return -1;
-  long hr = g_wv->lpVtbl->add_NavigationStarting(g_wv, nav_handler_obj, 0);
-  if (hr != 0) return hr;
-  hr = g_wv->lpVtbl->add_SourceChanged(g_wv, nav_handler_obj, 0);
-  return hr;
-}
-
 void wv_close(void) {
   /* Skip ICoreWebView2Controller::Close: on hosts whose browser process never
    * attached (broken/Edge-unified runtimes) it can crash the in-process
@@ -433,8 +395,4 @@ void wv_close(void) {
   g_wv = 0;
   g_hwnd = 0;
   CoUninitialize();
-}
-
-void wv_pump_messages(void) {
-  /* no-op placeholder; message pump runs on the JS side */
 }

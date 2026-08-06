@@ -33,23 +33,20 @@ async function materializeNativePath(importedPath: string, tempName: string): Pr
  * `with { type: 'file' }`; `bun build --compile` embeds it as an asset into the
  * single binary (verified: compiled EXE serves the identical 164704 bytes).
  *
- * Verified working (2026-08-05, Windows 11, runtime 151.0.4129.59):
+ * Verified working (2026-08-05, Windows 11, Edge-unified runtime 151.0.4129.59):
  * - tinycc compiles the shim at runtime and links kernel32/user32/ole32;
- * - the official WebView2Loader.dll loads and discovers the runtime;
- *   environment and controller COM objects are created; their
- *   completed-handler callbacks arrive through the PeekMessageW pump;
- * - the runtime's per-user profile directory is created; close() is guarded
- *   (controller Close() can crash on a runtime whose browser never attached).
+ * - the official WebView2Loader.dll (embedded asset) loads and discovers the
+ *   unified runtime (EBWebView\x64\EmbeddedBrowserWebView.dll);
+ * - environment + controller creation, navigation (NavigationCompleted),
+ *   ExecuteScript and bidirectional postMessage all verified end to end;
+ * - root cause of the earlier "no browser process / 0x8007139F" failure was a
+ *   missing AddRef on the environment/controller — the loader releases its
+ *   references after the completed callbacks, leaving dangling pointers that
+ *   broke the async browser spawn. Objects we hold are AddRef'd now.
  *
- * NOT working on this machine: navigation. `Navigate`/`NavigateToString`
- * return S_OK but the source stays `about:blank` and NavigationCompleted never
- * fires; deferred calls fail with 0x8007139F ("resource not in correct
- * state"). The browser process (msedgewebview2.exe) is spawned only
- * unreliably/delayed for a bun.exe host, and this install has an unusual
- * Edge-unified runtime with no WebView2.dll anywhere. This looks
- * machine/runtime-specific, not an FFI defect — the env/controller/callback
- * plumbing is all proven. Validate on a machine with a standard Evergreen
- * WebView2 runtime before wiring `window.provider = 'webview'` into app.ts.
+ * Remaining notes: `bun build --compile` embeds the .c/.dll assets into the
+ * single binary (verified). close() skips controller Close() (can crash when
+ * the runtime is torn down); fine for the spike.
  */
 
 export interface WebViewWindowOptions {
@@ -97,7 +94,7 @@ async function loadShim(): Promise<ShimSymbols> {
       const sourcePath = await materializeNativePath(shimPath, `bundesk-webview2-shim-${process.pid}.c`)
       const library = cc({
         source: sourcePath,
-        library: ['kernel32', 'user32', 'ole32', 'advapi32', 'psapi'],
+        library: ['kernel32', 'user32', 'ole32'],
         symbols: {
           set_handlers: { returns: 'void', args: ['ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'] },
           wv_init: { returns: 'i32', args: [] },
