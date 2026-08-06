@@ -402,7 +402,7 @@ const app = createDesktopApp({
 
 - 页面通过 `window.chrome.webview.postMessage` 与应用通信（消息到达 `onMessage`）；窗口句柄（`context.window`）在 `Bun.Subprocess` 表面之上额外提供 `executeScript`、`postMessage` 与 `navigate`。
 - WebView2 用户数据目录默认为 `<appData>/WebView2`。
-- 实现：无头文件 C shim（COM vtable 布局对照官方 WebView2.h 校验）由 Bun 内嵌 TinyCC 运行时编译，官方 WebView2Loader.dll 作为构建资产内嵌——无原生工具链，单二进制构建保留。
+- 实现：无头文件 C shim（COM vtable 布局对照官方 WebView2.h 校验）由 Bun 内嵌 TinyCC 运行时编译。刻意不使用官方 WebView2Loader.dll：shim 从 EdgeUpdate 注册表键读取运行时版本，直接调用 `EmbeddedBrowserWebView.dll` 的 `CreateWebViewEnvironmentWithOptionsInternal` 导出（非官方接口，风险已接受）——无原生工具链、无下载二进制，单二进制构建保留。
 - 应用提供的页面必须设置真实的 `content-type`（`text/html`）；否则页面按纯文本渲染。
 - WebView2 窗口仅 Windows；其他平台设置 `window.provider = 'webview'` 会抛错。
 

@@ -3,5 +3,3 @@ dist/
 *.tgz
 .DS_Store
 
-# Provisioned at runtime by src/runtime/webview2-loader.ts (NuGet download).
-src/webview2-loader.dll

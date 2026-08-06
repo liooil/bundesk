@@ -3,11 +3,8 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 // The shim ships as a real file; `bun build --compile` embeds it into the
-// single binary, and the import resolves to the embedded file path. The
-// WebView2Loader.dll is provisioned on demand (NuGet download, cached) and
-// resolved through a global plugin — see webview2-loader.ts.
+// single binary, and the import resolves to the embedded file path.
 import shimPath from '../webview2-shim.c' with { type: 'file' }
-import { ensureWebView2Loader } from './webview2-loader'
 
 /**
  * cc() and LoadLibrary() need a real native path. Dev runs resolve to the repo
@@ -24,21 +21,27 @@ async function materializeNativePath(importedPath: string, tempName: string): Pr
 }
 
 /**
- * WebView2 window provider (Windows) — SPIKE status.
+ * WebView2 window provider (Windows).
  *
  * The COM host is a small header-free C shim compiled at runtime by Bun's
  * embedded TinyCC (`cc`), so no native toolchain and no extra binary are
  * needed: the single-file build story is preserved. Vtable layouts in the
  * shim are verified against the official WebView2.h.
  *
- * The loader DLL is a real file (`src/webview2-loader.dll`) imported with
- * `with { type: 'file' }`; `bun build --compile` embeds it as an asset into the
- * single binary (verified: compiled EXE serves the identical 164704 bytes).
+ * The official WebView2Loader.dll is deliberately NOT used. Discovery is
+ * registry-driven: the shim reads the runtime version from the EdgeUpdate
+ * Clients key ({F3017226-...}), locates
+ * <runtime>\EBWebView\x64\EmbeddedBrowserWebView.dll, and calls its
+ * undocumented CreateWebViewEnvironmentWithOptionsInternal export directly
+ * with the 5-argument (bool, runtimeType, userDataDir, options, handler)
+ * signature cross-checked against jchv/OpenWebView2Loader. Accepted risk: an
+ * export rename in a future runtime breaks discovery.
  *
- * Verified working (2026-08-05, Windows 11, Edge-unified runtime 151.0.4129.59):
- * - tinycc compiles the shim at runtime and links kernel32/user32/ole32;
- * - the official WebView2Loader.dll (embedded asset) loads and discovers the
- *   unified runtime (EBWebView\x64\EmbeddedBrowserWebView.dll);
+ * Verified working (2026-08-06, Windows 11, Edge-unified runtime 151.0.4129.59,
+ * no loader DLL anywhere in the process):
+ * - tinycc compiles the shim at runtime and links kernel32/user32/ole32/advapi32;
+ * - registry discovery -> LoadLibrary(EmbeddedBrowserWebView.dll) ->
+ *   CreateWebViewEnvironmentWithOptionsInternal -> env callback (S_OK);
  * - environment + controller creation, navigation (NavigationCompleted),
  *   ExecuteScript and bidirectional postMessage all verified end to end;
  * - root cause of the earlier "no browser process / 0x8007139F" failure was a
@@ -46,10 +49,16 @@ async function materializeNativePath(importedPath: string, tempName: string): Pr
  *   references after the completed callbacks, leaving dangling pointers that
  *   broke the async browser spawn. Objects we hold are AddRef'd now.
  *
- * Remaining notes: `bun build --compile` embeds the .c/.dll assets into the
- * single binary (verified). close() skips controller Close() (can crash when
- * the runtime is torn down); fine for the spike. Pages served by the app must
- * set a real `content-type` (e.g. `text/html`) — without it the page renders
+ * Two TinyCC codegen constraints shape the shim: stack frames must stay small
+ * (tcc miscompiles functions with >~2KB of locals — a frame with two
+ * wchar_t[1024] buffers crashed every call, shrinking to MAX_PATH-sized
+ * buffers fixed it), and `long` is 32-bit on Windows x64 so pointer<->long
+ * casts are compile errors.
+ *
+ * Remaining notes: `bun build --compile` embeds the .c asset into the single
+ * binary (verified). close() skips controller Close() (can crash when the
+ * runtime is torn down); fine for the spike. Pages served by the app must
+…
  * as plain text and the DOM is not queryable.
  */
 
@@ -80,7 +89,7 @@ export interface WebViewWindow {
 interface ShimSymbols {
   set_handlers(env: number, ctrl: number, msg: number, nav: number, exec: number, close: number): void
   wv_init(): number
-  wv_use_loader(loaderPath: number): number
+  wv_use_runtime(): number
   wv_create_window(width: number, height: number, title: number): number | null
   wv_show(): void
   wv_create_environment(userDataFolder: number): number
@@ -104,11 +113,11 @@ async function loadShim(): Promise<ShimSymbols> {
       const sourcePath = await materializeNativePath(shimPath, `bundesk-webview2-shim-${process.pid}.c`)
       const library = cc({
         source: sourcePath,
-        library: ['kernel32', 'user32', 'ole32'],
+        library: ['kernel32', 'user32', 'ole32', 'advapi32'],
         symbols: {
           set_handlers: { returns: 'void', args: ['ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'] },
           wv_init: { returns: 'i32', args: [] },
-          wv_use_loader: { returns: 'i32', args: ['ptr'] },
+          wv_use_runtime: { returns: 'i32', args: [] },
           wv_create_window: { returns: 'ptr', args: ['i32', 'i32', 'ptr'] },
           wv_show: { returns: 'void', args: [] },
           wv_create_environment: { returns: 'i32', args: ['ptr'] },
@@ -158,12 +167,6 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
   const width = options.width ?? 900
   const height = options.height ?? 640
   const userDataFolder = options.userDataFolder ?? join(tmpdir(), `bundesk-webview2-data-${process.pid}`)
-
-  // Must stay dynamic: the plugin that resolves the DLL import is registered
-  // above, and static imports are resolved before the module body runs, so
-  // they would miss the plugin.
-  await ensureWebView2Loader()
-  const { default: loaderFile } = await import('../webview2-loader.dll', { with: { type: 'file' } })
 
   let resolveReady: (() => void) | undefined
   let rejectReady: ((error: Error) => void) | undefined
@@ -228,11 +231,13 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
     closeCallback.ptr as unknown as number,
   )
 
-  const loaderPath = await materializeNativePath(loaderFile, `bundesk-webview2-loader-${process.pid}.dll`)
-
   shim.wv_init()
-  if (!shim.wv_use_loader(ptr(utf16(loaderPath)))) {
-    throw new Error('WebView2Loader.dll failed to load or locate the WebView2 runtime')
+  if (!shim.wv_use_runtime()) {
+    throw new Error(
+      'WebView2 runtime not found. The runtime registers under EdgeUpdate Clients ' +
+        '{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5} and hosts EmbeddedBrowserWebView.dll ' +
+        '(installed with Microsoft Edge on Windows 10/11).',
+    )
   }
 
   const hwnd = shim.wv_create_window(width, height, ptr(utf16(options.title ?? 'BunDesk')))

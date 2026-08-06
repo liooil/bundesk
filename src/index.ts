@@ -10,7 +10,6 @@ import {
   type DesktopMacosOptions,
   type MacosAppBundleResult,
 } from './darwin-bundle'
-import { ensureWebView2Loader } from './runtime/webview2-loader'
 
 export type WindowsConsoleMode = 'detached' | 'hidden' | 'inherit'
 
@@ -80,10 +79,6 @@ export function defineConfig<T extends DesktopAppConfig | DesktopAppConfig[]>(co
 }
 
 export async function buildDesktopApp(config: DesktopAppConfig): Promise<DesktopBuildResult> {
-  // Lets the bundler resolve webview2-loader.dll imports (provisioned on
-  // demand) so webview windows work in compiled single binaries too.
-  await ensureWebView2Loader()
-
   const root = resolve(config.root ?? process.cwd())
   const target = config.target ?? 'bun-windows-x64'
   const isWindowsTarget = target.startsWith('bun-windows-')
@@ -407,7 +402,6 @@ export * from './runtime/tray'
 export * from './runtime/tray-win32'
 export * from './runtime/updater'
 export * from './runtime/webview2'
-export * from './runtime/webview2-loader'
 export * from './runtime/windows-integration'
 export type {
   DesktopMacosOptions,

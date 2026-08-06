@@ -214,7 +214,13 @@ static char* to_utf8(const wchar_t* w) {
   return g_utf8buf;
 }
 
-typedef long (*create_env_fn)(const wchar_t*, const wchar_t*, void*, void*);
+/* CreateWebViewEnvironmentWithOptionsInternal (undocumented):
+ *   HRESULT (bool unknown, WebView2RunTimeType runtimeType, PCWSTR userDataDir,
+ *            IUnknown* environmentOptions, ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler*)
+ * Cross-checked against jchv/OpenWebView2Loader. `unknown` is passed as true
+ * by the loader; runtimeType = kInstalled(0) for the system runtime,
+ * kRedistributable(1) for an embedded client DLL. */
+typedef long (*create_env_fn)(int, int, const wchar_t*, void*, void*);
 static create_env_fn g_create_env;
 
 /* ---- handler objects: { vtable*, refs } ---- */
@@ -274,18 +280,105 @@ static void* handler_vtbl(int kind) {
   return vtables[kind];
 }
 
-/* ---- runtime discovery via the official WebView2Loader.dll ---- */
+/* ---- runtime discovery without the official loader ---- */
 /*
- * The WebView2 runtime no longer ships WebView2.dll at a discoverable path
- * (Edge-unified runtimes host from EBWebView\x64\EmbeddedBrowserWebView.dll),
- * so hand-rolled registry lookup is not viable. The SDK's WebView2Loader.dll
- * does the whole discovery; bundesk embeds it and extracts it at runtime.
+ * The unified WebView2 runtime hosts from
+ * <runtime>\EBWebView\x64\EmbeddedBrowserWebView.dll and exports the
+ * environment-creation entry as `CreateWebViewEnvironmentWithOptionsInternal`
+ * — an unstable, undocumented export (the official loader wraps it). We call
+ * it directly, accepting the unofficial status: discovery is registry-driven
+ * (EdgeUpdate client GUID -> version -> known install bases), so runtime
+ * version updates do not break it; only an export rename would.
  */
-int wv_use_loader(const wchar_t* loaderPath) {
-  HMODULE mod = LoadLibraryW(loaderPath);
+#define KEY_READ 0x20019
+#define HKEY_LOCAL_MACHINE ((void*)0x80000002)
+extern long RegOpenKeyExW(void*, const wchar_t*, DWORD, UINT, void**);
+extern long RegQueryValueExW(void*, const wchar_t*, void*, UINT*, unsigned char*, unsigned long*);
+extern void RegCloseKey(void*);
+extern unsigned long GetEnvironmentVariableW(const wchar_t*, wchar_t*, unsigned long);
+extern void* FindFirstFileW(const wchar_t*, void*);
+extern int FindNextFileW(void*, void*);
+extern int FindClose(void*);
+
+static int try_load_runtime(const wchar_t* baseDir) {
+  wchar_t path[260];
+  wsprintfW(path, L"%s\\EBWebView\\x64\\EmbeddedBrowserWebView.dll", baseDir);
+  HMODULE mod = LoadLibraryW(path);
   if (!mod) return 0;
-  g_create_env = (create_env_fn)GetProcAddress(mod, "CreateCoreWebView2EnvironmentWithOptions");
+  g_create_env = (create_env_fn)GetProcAddress(mod, "CreateWebViewEnvironmentWithOptionsInternal");
   return g_create_env ? 1 : 0;
+}
+
+static int try_version_in_bases(const wchar_t* version) {
+  wchar_t dir[260];
+  wsprintfW(dir, L"C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\%s", version);
+  if (try_load_runtime(dir)) return 1;
+  wsprintfW(dir, L"C:\\Program Files\\Microsoft\\EdgeWebView\\Application\\%s", version);
+  if (try_load_runtime(dir)) return 1;
+  wchar_t local[260];
+  if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, 260) > 0) {
+    wsprintfW(dir, L"%s\\Microsoft\\EdgeWebView\\Application\\%s", local, version);
+    if (try_load_runtime(dir)) return 1;
+  }
+  return 0;
+}
+
+typedef struct {
+  unsigned long attrs;
+  unsigned long long createTime;
+  unsigned long long accessTime;
+  unsigned long long writeTime;
+  unsigned long sizeHigh;
+  unsigned long sizeLow;
+  unsigned long reserved0;
+  unsigned long reserved1;
+  wchar_t name[260];
+  wchar_t altName[14];
+} FIND_DATA;
+
+static int enumerate_base(const wchar_t* base) {
+  wchar_t pattern[260];
+  FIND_DATA fd;
+  wsprintfW(pattern, L"%s*", base);
+  void* find = FindFirstFileW(pattern, &fd);
+  if (find == (void*)-1) return 0;
+  do {
+    if (fd.name[0] == '.') continue;
+    wchar_t dir[260];
+    wsprintfW(dir, L"%s%s", base, fd.name);
+    if (try_load_runtime(dir)) {
+      FindClose(find);
+      return 1;
+    }
+  } while (FindNextFileW(find, &fd) != 0);
+  FindClose(find);
+  return 0;
+}
+
+int wv_use_runtime(void) {
+  static const wchar_t* clientKey =
+    L"SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+  static const wchar_t* clientKeyNative =
+    L"SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
+  const wchar_t* keys[2] = { clientKey, clientKeyNative };
+  int k;
+  for (k = 0; k < 2; k++) {
+    void* key = 0;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[k], 0, KEY_READ, &key) == 0) {
+      wchar_t version[64];
+      unsigned long size = sizeof(version);
+      if (RegQueryValueExW(key, L"pv", 0, 0, (unsigned char*)version, &size) == 0) {
+        RegCloseKey(key);
+        if (try_version_in_bases(version)) return 1;
+        continue;
+      }
+      RegCloseKey(key);
+    }
+  }
+  /* registry miss: enumerate the standard bases for any installed version */
+  if (enumerate_base(L"C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\")) return 1;
+  if (enumerate_base(L"C:\\Program Files\\Microsoft\\EdgeWebView\\Application\\")) return 1;
+  return 0;
 }
 
 /* ---- window + controller + webview state ---- */
@@ -349,8 +442,8 @@ long wv_create_environment(const wchar_t* userDataFolder) {
   nav_handler_obj[0] = handler_vtbl(3);
   exec_handler_obj[0] = handler_vtbl(4);
   if (!g_create_env) return -1;
-  /* (browserExecutableFolder=NULL -> system runtime, userDataFolder, options, handler) */
-  return g_create_env(0, userDataFolder, 0, env_handler_obj);
+  /* (unknown=true, kInstalled, userDataFolder, options=NULL, handler) */
+  return g_create_env(1, 0, userDataFolder, 0, env_handler_obj);
 }
 
 long wv_create_controller(void* env, HWND hwnd) {

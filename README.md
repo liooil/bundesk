@@ -408,9 +408,12 @@ const app = createDesktopApp({
   surface.
 - The WebView2 user-data folder defaults to `<appData>/WebView2`.
 - Implementation: a header-free C shim (COM vtable layouts verified against the
-  official WebView2.h) compiled at runtime by Bun's embedded TinyCC, plus the
-  official WebView2Loader.dll embedded as a build asset — no native toolchain,
-  single-binary build preserved.
+  official WebView2.h) compiled at runtime by Bun's embedded TinyCC. The
+  official WebView2Loader.dll is deliberately not used: the shim reads the
+  runtime version from the EdgeUpdate registry key and calls
+  `CreateWebViewEnvironmentWithOptionsInternal` in
+  `EmbeddedBrowserWebView.dll` directly (undocumented, accepted risk) — no
+  native toolchain, no downloaded binaries, single-binary build preserved.
 - Pages served by the app must set a real `content-type` (`text/html`); without
   it the page renders as plain text.
 - WebView2 windows are Windows-only; `window.provider = 'webview'` throws on
