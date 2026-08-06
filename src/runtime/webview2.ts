@@ -28,14 +28,17 @@ async function materializeNativePath(importedPath: string, tempName: string): Pr
  * needed: the single-file build story is preserved. Vtable layouts in the
  * shim are verified against the official WebView2.h.
  *
- * The official WebView2Loader.dll is deliberately NOT used. Discovery is
- * registry-driven: the shim reads the runtime version from the EdgeUpdate
- * Clients key ({F3017226-...}), locates
- * <runtime>\EBWebView\x64\EmbeddedBrowserWebView.dll, and calls its
- * undocumented CreateWebViewEnvironmentWithOptionsInternal export directly
- * with the 5-argument (bool, runtimeType, userDataDir, options, handler)
- * signature cross-checked against jchv/OpenWebView2Loader. Accepted risk: an
- * export rename in a future runtime breaks discovery.
+ * The official WebView2Loader.dll is deliberately NOT used. Discovery mirrors
+ * the loader's own logic (jchv/OpenWebView2Loader): EdgeUpdate records the
+ * runtime install folder in
+ * HKCU|HKLM\Software\Microsoft\EdgeUpdate\ClientState\{F3017226-...}\EBWebView
+ * (both registry views probed; the loader is 32-bit and relies on implicit
+ * redirection). The shim then loads
+ * <base>\EBWebView\x64\EmbeddedBrowserWebView.dll and calls its undocumented
+ * CreateWebViewEnvironmentWithOptionsInternal export directly with the
+ * 5-argument (bool, runtimeType, userDataDir, options, handler) signature
+ * cross-checked against jchv/OpenWebView2Loader. Accepted risk: an export
+ * rename in a future runtime breaks discovery.
  *
  * Verified working (2026-08-06, Windows 11, Edge-unified runtime 151.0.4129.59,
  * no loader DLL anywhere in the process):

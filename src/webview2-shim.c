@@ -286,16 +286,23 @@ static void* handler_vtbl(int kind) {
  * <runtime>\EBWebView\x64\EmbeddedBrowserWebView.dll and exports the
  * environment-creation entry as `CreateWebViewEnvironmentWithOptionsInternal`
  * — an unstable, undocumented export (the official loader wraps it). We call
- * it directly, accepting the unofficial status: discovery is registry-driven
- * (EdgeUpdate client GUID -> version -> known install bases), so runtime
- * version updates do not break it; only an export rename would.
+ * it directly, accepting the unofficial status; only an export rename would
+ * break it.
+ *
+ * Discovery mirrors the official loader (jchv/OpenWebView2Loader documents
+ * the same logic; the loader binary itself is not reverse-engineered):
+ * EdgeUpdate records the runtime install folder in
+ * HKCU|HKLM\Software\Microsoft\EdgeUpdate\ClientState\{F3017226-...}\EBWebView
+ * (REG_SZ, full base path). Probe both hives and both registry views
+ * (WOW6432Node/native — the loader is 32-bit and gets redirected
+ * implicitly), then fall back to enumerating the standard install bases.
  */
 #define KEY_READ 0x20019
+#define HKEY_CURRENT_USER ((void*)0x80000001)
 #define HKEY_LOCAL_MACHINE ((void*)0x80000002)
 extern long RegOpenKeyExW(void*, const wchar_t*, DWORD, UINT, void**);
 extern long RegQueryValueExW(void*, const wchar_t*, void*, UINT*, unsigned char*, unsigned long*);
 extern void RegCloseKey(void*);
-extern unsigned long GetEnvironmentVariableW(const wchar_t*, wchar_t*, unsigned long);
 extern void* FindFirstFileW(const wchar_t*, void*);
 extern int FindNextFileW(void*, void*);
 extern int FindClose(void*);
@@ -309,16 +316,35 @@ static int try_load_runtime(const wchar_t* baseDir) {
   return g_create_env ? 1 : 0;
 }
 
-static int try_version_in_bases(const wchar_t* version) {
-  wchar_t dir[260];
-  wsprintfW(dir, L"C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\%s", version);
-  if (try_load_runtime(dir)) return 1;
-  wsprintfW(dir, L"C:\\Program Files\\Microsoft\\EdgeWebView\\Application\\%s", version);
-  if (try_load_runtime(dir)) return 1;
-  wchar_t local[260];
-  if (GetEnvironmentVariableW(L"LOCALAPPDATA", local, 260) > 0) {
-    wsprintfW(dir, L"%s\\Microsoft\\EdgeWebView\\Application\\%s", local, version);
-    if (try_load_runtime(dir)) return 1;
+/* reads <hive>\Software\...\EdgeUpdate\ClientState\{GUID}\EBWebView into out
+ * (REG_SZ base path); returns 1 on success. The official loader is a 32-bit
+ * DLL, so its plain-key reads land in the 32-bit view automatically; this
+ * 64-bit shim probes the WOW6432Node (32-bit) and native (64-bit) views
+ * explicitly, for both per-user (HKCU) and per-machine (HKLM) installs. */
+static int read_runtime_path(void* hive, const wchar_t* middle, wchar_t* out) {
+  void* key = 0;
+  wchar_t keyPath[300];
+  wsprintfW(keyPath, L"Software\\%sMicrosoft\\EdgeUpdate\\ClientState\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}", middle);
+  if (RegOpenKeyExW(hive, keyPath, 0, KEY_READ, &key) != 0) return 0;
+  unsigned long size = 260 * 2;
+  long r = RegQueryValueExW(key, L"EBWebView", 0, 0, (unsigned char*)out, &size);
+  RegCloseKey(key);
+  return r == 0;
+}
+
+static int try_runtime_from_registry(void) {
+  wchar_t base[260];
+  if (read_runtime_path(HKEY_CURRENT_USER, L"WOW6432Node\\", base)) {
+    if (try_load_runtime(base)) return 1;
+  }
+  if (read_runtime_path(HKEY_CURRENT_USER, L"", base)) {
+    if (try_load_runtime(base)) return 1;
+  }
+  if (read_runtime_path(HKEY_LOCAL_MACHINE, L"WOW6432Node\\", base)) {
+    if (try_load_runtime(base)) return 1;
+  }
+  if (read_runtime_path(HKEY_LOCAL_MACHINE, L"", base)) {
+    if (try_load_runtime(base)) return 1;
   }
   return 0;
 }
@@ -356,25 +382,8 @@ static int enumerate_base(const wchar_t* base) {
 }
 
 int wv_use_runtime(void) {
-  static const wchar_t* clientKey =
-    L"SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
-  static const wchar_t* clientKeyNative =
-    L"SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
-  const wchar_t* keys[2] = { clientKey, clientKeyNative };
-  int k;
-  for (k = 0; k < 2; k++) {
-    void* key = 0;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keys[k], 0, KEY_READ, &key) == 0) {
-      wchar_t version[64];
-      unsigned long size = sizeof(version);
-      if (RegQueryValueExW(key, L"pv", 0, 0, (unsigned char*)version, &size) == 0) {
-        RegCloseKey(key);
-        if (try_version_in_bases(version)) return 1;
-        continue;
-      }
-      RegCloseKey(key);
-    }
-  }
+  /* primary: EdgeUpdate's own record of the install path */
+  if (try_runtime_from_registry()) return 1;
   /* registry miss: enumerate the standard bases for any installed version */
   if (enumerate_base(L"C:\\Program Files (x86)\\Microsoft\\EdgeWebView\\Application\\")) return 1;
   if (enumerate_base(L"C:\\Program Files\\Microsoft\\EdgeWebView\\Application\\")) return 1;
