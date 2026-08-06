@@ -501,7 +501,7 @@ Done (this round):
 
 To be evaluated:
 
-- Round 1: draw.io Desktop (Electron), NextChat (Tauri), NeoHtop (Tauri), covering static-heavy, web-first and native-backend app types;
+- Round 1: draw.io Desktop (Electron), NextChat (Tauri), NeoHtop (Tauri), LLMPET (Electron), covering static-heavy, web-first, native-backend and small-but-real-backend (state machine + metering + permission) app types;
 - Round 2: MarkText (Electron), Yaak (Tauri), widening the compatibility boundary for file systems, editors, databases, networking, plugins and secret/keychain;
 - landing the macOS signing/notarization pipeline on real Mac CI;
 - **Hermes Agent + Poly**: evaluate hosting Bun and RustPython in the same process via [Poly](https://github.com/liooil/poly), integrating [Hermes Agent](https://github.com/NousResearch/hermes-agent)'s Python agent/runtime with the BunDesk desktop shell;

@@ -501,7 +501,7 @@ Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`
 
 待评估：
 
-- 第一轮：draw.io Desktop（Electron）、NextChat（Tauri）、NeoHtop（Tauri），覆盖 static-heavy、web-first 和 native-backend 三类应用；
+- 第一轮：draw.io Desktop（Electron）、NextChat（Tauri）、NeoHtop（Tauri）、LLMPET（Electron），覆盖 static-heavy、web-first、native-backend 和 small-but-real-backend（状态机 + 计量 + 权限）四类应用；
 - 第二轮：MarkText（Electron）、Yaak（Tauri），扩大文件系统、编辑器、数据库、网络、插件和 secret/keychain 的兼容性边界；
 - macOS 签名/公证流水线在真实 Mac CI 上的落地；
 - **Hermes Agent + Poly**：评估以 [Poly](https://github.com/liooil/poly) 在同一进程中承载 Bun 与 RustPython，将 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的 Python agent/runtime 与 BunDesk 桌面壳整合；
