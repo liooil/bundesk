@@ -525,7 +525,7 @@ void wv_close(void) {
   /* Skip ICoreWebView2Controller::Close: on hosts whose browser process never
    * attached (broken/Edge-unified runtimes) it can crash the in-process
    * runtime. DestroyWindow + CoUninitialize releases the view; the COM objects
-   * leak until process exit, which is fine for the spike. */
+   * leak until process exit, which the process teardown handles. */
   if (g_hwnd) DestroyWindow(g_hwnd);
   g_ctrl = 0;
   g_wv = 0;

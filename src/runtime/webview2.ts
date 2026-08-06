@@ -50,7 +50,7 @@ import { materializeNativePath } from './native-assets'
  *
  * Remaining notes: `bun build --compile` embeds the .c asset into the single
  * binary (verified). close() skips controller Close() (can crash when the
- * runtime is torn down); fine for the spike. Pages served by the app must
+ * runtime is torn down); the process teardown handles it. Pages served by the app must
 …
  * as plain text and the DOM is not queryable.
  */
