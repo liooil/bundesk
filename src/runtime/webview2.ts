@@ -258,23 +258,21 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
     if (closed) return
     closed = true
     exitCode = 0
-    // 先 resolve：app 的 wait() 依赖 exited 退出进程；wv_close 的
-    // DestroyWindow/CoUninitialize 即使因线程问题失败也不阻塞退出。
+    // 全部在 JS 线程执行：CoUninitialize 必须与 CoInitializeEx（wv_init，
+    // JS 线程）同线程；DestroyWindow 需要窗口线程。resolveExited 触发
+    // app.wait() → stop() → 进程退出。
     resolveExited?.()
     shim.wv_close()
     stopPump()
-    envCallback.close()
-    ctrlCallback.close()
-    messageCallback.close()
-    navCallback.close()
-    execCallback.close()
-    closeCallback.close()
+    // 不主动 close 各 JSCallback：进程即将退出，OS 回收；且 closeCallback
+    // 正在执行（WebView2 COM 层仍持有函数指针），回调内 close 自身会
+    // use-after-free 崩溃。
   }
 
   const closeCallback = new JSCallback(() => {
     options.onClose?.()
-    // WM_CLOSE → 关闭窗口并让进程退出（exited resolve）。
-    closeWindow()
+    // WM_CLOSE → 派发回 JS 线程执行关闭（回调本身跑在 WebView2 派发线程）。
+    setTimeout(closeWindow, 0)
   }, { args: [], returns: 'void' })
 
   shim.set_handlers(
