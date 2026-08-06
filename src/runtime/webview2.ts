@@ -66,6 +66,9 @@ export interface WebViewWindowOptions {
   onNavigateCompleted?: (info: { success: boolean; errorStatus: number }) => void
 }
 
+/** controller 回调就绪等待上限；超时说明 WebView2 侧挂起（常见于 user data 目录被占用）。 */
+const WEBVIEW_READY_TIMEOUT_MS = 45_000
+
 export interface WebViewWindow {
   /** Null while the window is open; set on close (Bun.Subprocess-compatible). */
   exitCode: number | null
@@ -84,7 +87,7 @@ interface ShimSymbols {
   wv_init(): number
   wv_use_runtime(): number
   wv_create_window(width: number, height: number, title: number): number | null
-  wv_show(): void
+  wv_show(): number
   wv_create_environment(userDataFolder: number): number
   wv_create_controller(env: number, hwnd: number): number
   wv_setup(ctrl: number): number
@@ -112,7 +115,7 @@ async function loadShim(): Promise<ShimSymbols> {
           wv_init: { returns: 'i32', args: [] },
           wv_use_runtime: { returns: 'i32', args: [] },
           wv_create_window: { returns: 'ptr', args: ['i32', 'i32', 'ptr'] },
-          wv_show: { returns: 'void', args: [] },
+          wv_show: { returns: 'i32', args: [] },
           wv_create_environment: { returns: 'i32', args: ['ptr'] },
           wv_create_controller: { returns: 'i32', args: ['ptr', 'ptr'] },
           wv_setup: { returns: 'i32', args: ['ptr'] },
@@ -178,28 +181,45 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
   const height = options.height ?? 640
   const userDataFolder = options.userDataFolder ?? join(tmpdir(), `bundesk-webview2-data-${process.pid}`)
 
-  let resolveReady: (() => void) | undefined
+  let resolveReady: ((ctrl: number) => void) | undefined
   let rejectReady: ((error: Error) => void) | undefined
-  const ready = new Promise<void>((resolve, reject) => {
+  const ready = new Promise<number>((resolve, reject) => {
     resolveReady = resolve
     rejectReady = reject
   })
 
   let pendingExec: ((result: unknown) => void) | null = null
 
-  const envCallback = new JSCallback((_err: number, env: number) => {
+  const envCallback = new JSCallback((err: number, env: number) => {
+    if (err !== 0 || env === 0) {
+      rejectReady?.(new Error(
+        `WebView2 environment creation failed (HRESULT 0x${(err >>> 0).toString(16)}). ` +
+        `userDataFolder 可能被其他 WebView2 进程占用: ${userDataFolder}`,
+      ))
+      return
+    }
     shim.wv_create_controller(env, hwnd as unknown as number)
   }, { args: ['i32', 'ptr'], returns: 'void' })
 
-  const ctrlCallback = new JSCallback((_err: number, ctrl: number) => {
+  const ctrlCallback = new JSCallback((err: number, ctrl: number) => {
+    if (err !== 0 || ctrl === 0) {
+      rejectReady?.(new Error(
+        `WebView2 controller creation failed (HRESULT 0x${(err >>> 0).toString(16)}). ` +
+        `userDataFolder 可能被其他 WebView2 进程占用: ${userDataFolder}`,
+      ))
+      return
+    }
+    // COM 调用必须在此回调所在线程执行（WebView2 派发线程）：JS 线程调用
+    // 会崩溃（0xFFFFFFFF）。wv_setup 内含 put_Bounds（窗口不可见时不会收到
+    // WM_SIZE，Bounds 必须显式初始化，否则内容区域为 0 导致白屏）与
+    // put_IsVisible。
     const hr = shim.wv_setup(ctrl)
     if (hr !== 0) {
       rejectReady?.(new Error(`WebView2 setup failed (HRESULT 0x${(hr >>> 0).toString(16)})`))
       return
     }
     shim.wv_navigate(ptr(utf16(options.url)))
-    shim.wv_show()
-    resolveReady?.()
+    resolveReady?.(ctrl)
   }, { args: ['i32', 'ptr'], returns: 'void' })
 
   const messageCallback = new JSCallback((utf8Ptr: Pointer) => {
@@ -228,8 +248,33 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
     resolve?.(value)
   }, { args: ['ptr'], returns: 'void' })
 
+  let closed = false
+  let exitCode: number | null = null
+  let resolveExited: (() => void) | undefined
+  const exited = new Promise<void>((resolve) => {
+    resolveExited = resolve
+  })
+  const closeWindow = () => {
+    if (closed) return
+    closed = true
+    exitCode = 0
+    // 先 resolve：app 的 wait() 依赖 exited 退出进程；wv_close 的
+    // DestroyWindow/CoUninitialize 即使因线程问题失败也不阻塞退出。
+    resolveExited?.()
+    shim.wv_close()
+    stopPump()
+    envCallback.close()
+    ctrlCallback.close()
+    messageCallback.close()
+    navCallback.close()
+    execCallback.close()
+    closeCallback.close()
+  }
+
   const closeCallback = new JSCallback(() => {
     options.onClose?.()
+    // WM_CLOSE → 关闭窗口并让进程退出（exited resolve）。
+    closeWindow()
   }, { args: [], returns: 'void' })
 
   shim.set_handlers(
@@ -260,28 +305,22 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
     throw new Error(`WebView2 environment creation failed (HRESULT 0x${(hr >>> 0).toString(16)})`)
   }
 
-  await ready
+  let readyTimer: Timer | undefined
+  const ctrl = await Promise.race([
+    ready,
+    new Promise<number>((_, reject) => {
+      readyTimer = setTimeout(() => reject(new Error(
+        `WebView2 窗口在 ${WEBVIEW_READY_TIMEOUT_MS}ms 内未就绪（controller 回调未触发）。` +
+        `userDataFolder 可能被其他 WebView2 进程占用: ${userDataFolder}`,
+      )), WEBVIEW_READY_TIMEOUT_MS)
+    }),
+  ])
+  // 就绪后必须清掉超时定时器，否则进程会滞留到定时器到期才退出。
+  clearTimeout(readyTimer)
+  // 窗口显示必须在创建线程（JS 线程）：回调线程（WebView2 派发线程）上的
+  // SetWindowPos 无效（窗口存在但 WS_VISIBLE 未设置）。
+  shim.wv_show()
 
-  let closed = false
-  let exitCode: number | null = null
-  let resolveExited: (() => void) | undefined
-  const exited = new Promise<void>((resolve) => {
-    resolveExited = resolve
-  })
-  const closeWindow = () => {
-    if (closed) return
-    closed = true
-    exitCode = 0
-    resolveExited?.()
-    shim.wv_close()
-    stopPump()
-    envCallback.close()
-    ctrlCallback.close()
-    messageCallback.close()
-    navCallback.close()
-    execCallback.close()
-    closeCallback.close()
-  }
   return {
     exitCode,
     exited,

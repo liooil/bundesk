@@ -197,7 +197,19 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
         cwd: process.cwd(),
         onSecondInstance,
       })
-      if (instance.kind === 'secondary') return instance
+      if (instance.kind === 'secondary') {
+        // secondary 进程是"转发后即退出"，没有任何窗口/服务；不给用户提示
+        // 会被当成"启动没反应"。转发结果与僵尸持有者两种场景分开说明。
+        if (instance.accepted) {
+          console.log(`检测到 ${this.options.id} 已在运行，启动参数已转发，本进程退出。`)
+        } else {
+          console.warn(
+            `检测到 ${this.options.id} 实例在运行，但启动参数转发未得到确认。` +
+            '若该实例无响应（如残留的僵死进程），请结束其进程后重试。',
+          )
+        }
+        return instance
+      }
     }
 
     if (parsed.command === 'upgrade') {

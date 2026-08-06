@@ -36,13 +36,14 @@ extern void* GetProcAddress(void*, const char*);
 extern void* GetModuleHandleW(const wchar_t*);
 extern unsigned long GetCurrentProcessId(void);
 extern int WideCharToMultiByte(UINT, DWORD, const wchar_t*, int, char*, int, const char*, int*);
-extern void* CoInitializeEx(void*, DWORD);
+extern long CoInitializeEx(void*, DWORD);
 extern void CoUninitialize(void);
 extern unsigned short RegisterClassW(const void*);
 extern void* CreateWindowExW(UINT, const wchar_t*, const wchar_t*, DWORD, int, int, int, int, HWND, void*, HINSTANCE, void*);
 extern long DefWindowProcW(HWND, UINT, void*, void*);
 extern int DestroyWindow(HWND);
-extern int ShowWindow(HWND, int);
+extern int GetClientRect(HWND, void*);
+extern int SetWindowPos(HWND, HWND, int, int, int, int, unsigned int);
 extern int wsprintfW(wchar_t*, const wchar_t*, ...);
 
 /* ---- minimal structures ---- */
@@ -437,15 +438,17 @@ void* wv_create_window(int w, int h, const wchar_t* title) {
   return (void*)g_hwnd;
 }
 
-void wv_show(void) {
-  if (g_hwnd) ShowWindow(g_hwnd, SW_SHOW);
+int wv_show(void) {
+  /* TinyCC 直调 ShowWindow 实测无效（rc=0 但窗口仍不可见，JS 侧同句柄
+   * 同线程调用有效）；SetWindowPos 的 SWP_SHOWWINDOW 是等价替代。 */
+  if (!g_hwnd) return -1;
+  return SetWindowPos(g_hwnd, 0, 0, 0, 0, 0,
+    0x0001 /*SWP_NOSIZE*/ | 0x0002 /*SWP_NOMOVE*/ | 0x0040 /*SWP_SHOWWINDOW*/);
 }
 
 int wv_init(void) {
-  /* bun 宿主默认 DPI unaware，Windows 会把整个窗口位图放大，文字发糊。
-   * DPI awareness 是进程级且只能设置一次，必须在任何 HWND 创建之前；
-   * wv_init 是首个原生入口，满足该约束。Per-Monitor v2 是 WebView2 推荐的
-   * 宿主级别（内容按当前显示器 DPI 渲染，跨屏拖动不重采样）。 */
+  /* DPI：unaware 会被系统位图放大导致文字模糊；进程级只能设置一次，
+   * 必须在任何 HWND 创建之前。 */
   {
     HMODULE user32 = LoadLibraryW(L"user32.dll");
     if (user32) {
@@ -467,8 +470,9 @@ int wv_init(void) {
       }
     }
   }
-  CoInitializeEx(0, COINIT_APARTMENTTHREADED);
-  return 1;
+  /* 返回 CoInitializeEx 的 HRESULT：S_OK=本线程新建 STA，S_FALSE=COM 已被
+   * 该线程初始化（apartment 可能不符）。dev 的 bun.exe 可能预初始化过 COM。 */
+  return CoInitializeEx(0, COINIT_APARTMENTTHREADED);
 }
 
 long wv_create_environment(const wchar_t* userDataFolder) {
@@ -494,12 +498,15 @@ long wv_create_controller(void* env, HWND hwnd) {
 long wv_setup(void* ctrl) {
   g_ctrl = (ICoreWebView2Controller*)ctrl;
   if (g_ctrl) g_ctrl->lpVtbl->AddRef(g_ctrl);
-  long hr = g_ctrl->lpVtbl->put_IsVisible(g_ctrl, 1);
+  RECT rc;
+  GetClientRect(g_hwnd, &rc);
+  long hr = g_ctrl->lpVtbl->put_Bounds(g_ctrl, &rc);
+  long visHr = g_ctrl->lpVtbl->put_IsVisible(g_ctrl, 1);
   hr = g_ctrl->lpVtbl->get_CoreWebView2(g_ctrl, (void**)&g_wv);
   if (g_wv) g_wv->lpVtbl->AddRef(g_wv);
   hr = g_wv->lpVtbl->add_WebMessageReceived(g_wv, msg_handler_obj, 0);
   hr = g_wv->lpVtbl->add_NavigationCompleted(g_wv, nav_handler_obj, 0);
-  return hr;
+  return hr || visHr;
 }
 
 long wv_navigate(const wchar_t* url) {
