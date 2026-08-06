@@ -404,7 +404,17 @@ const app = createDesktopApp({
 - WebView2 用户数据目录默认为 `<appData>/WebView2`。
 - 实现：无头文件 C shim（COM vtable 布局对照官方 WebView2.h 校验）由 Bun 内嵌 TinyCC 运行时编译。刻意不使用官方 WebView2Loader.dll：shim 从 EdgeUpdate 注册表键读取运行时安装路径，直接调用 `EmbeddedBrowserWebView.dll` 的 `CreateWebViewEnvironmentWithOptionsInternal` 导出。该导出非文档化但事实上 ABI 稳定——它正是官方 loader 自身依赖的同一导出（loader 的环境创建路径就是 GetProcAddress 此导出加一次直调），冻结的二进制无论内嵌 loader 还是本 shim，失败方式完全相同——无原生工具链、无下载二进制，单二进制构建保留。
 - 应用提供的页面必须设置真实的 `content-type`（`text/html`）；否则页面按纯文本渲染。
-- WebView2 窗口仅 Windows；其他平台设置 `window.provider = 'webview'` 会抛错。
+
+各平台窗口 provider（`provider: 'browser'` 为默认，全平台可用，以系统浏览器 App Mode 启动）：
+
+| 平台 | 进程内 provider | 状态 | 机制 |
+| --- | --- | --- | --- |
+| Windows | `webview`（WebView2） | **已实现** | 内嵌 TinyCC 编译的 C shim；直调运行时 `EmbeddedBrowserWebView.dll`（无 loader 二进制） |
+| Linux | `webkit`（WebKitGTK） | 规划中，未实现 | `webkit2gtk-4.1` C API shim，同一 TinyCC 模式（`evaluate_javascript` → `executeScript`，`script-message-received` → `onMessage`）；需系统装有 `libwebkit2gtk-4.1`，否则回落到 `browser` |
+| macOS | `wkwebview`（WKWebView） | 未实现 | `objc_msgSend` FFI shim；可行但最脆弱（ObjC block、NSApplication run loop） |
+| Termux | — | 不支持 | Android 无 shell 进程可用的 WebView API；嵌入式 WebView 需构建 APK。VIEW intent（`browser`）是既定路径 |
+
+非 Windows 平台设置 `window.provider = 'webview'` 会抛错。
 
 ## 自动升级
 

@@ -419,8 +419,18 @@ const app = createDesktopApp({
   downloaded binaries, single-binary build preserved.
 - Pages served by the app must set a real `content-type` (`text/html`); without
   it the page renders as plain text.
-- WebView2 windows are Windows-only; `window.provider = 'webview'` throws on
-  other platforms.
+
+Window providers by platform (`provider: 'browser'` is the default everywhere
+and launches the system browser in App Mode):
+
+| Platform | In-process provider | Status | Mechanism |
+| --- | --- | --- | --- |
+| Windows | `webview` (WebView2) | **Implemented** | C shim compiled by embedded TinyCC; direct call into the runtime's `EmbeddedBrowserWebView.dll` (no loader binary) |
+| Linux | `webkit` (WebKitGTK) | Planned, not implemented | `webkit2gtk-4.1` C API shim, same TinyCC pattern (`evaluate_javascript` → `executeScript`, `script-message-received` → `onMessage`); requires `libwebkit2gtk-4.1` installed, falls back to `browser` otherwise |
+| macOS | `wkwebview` (WKWebView) | Not implemented | `objc_msgSend` FFI shim; feasible but the most fragile (ObjC blocks, NSApplication run loop) |
+| Termux | — | Not supported | Android has no shell-process WebView API; embedded WebView needs an APK. VIEW intent (`browser`) is the intended path |
+
+`window.provider = 'webview'` throws on non-Windows platforms.
 
 ## Automatic updates
 
