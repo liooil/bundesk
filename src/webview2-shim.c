@@ -442,6 +442,31 @@ void wv_show(void) {
 }
 
 int wv_init(void) {
+  /* bun 宿主默认 DPI unaware，Windows 会把整个窗口位图放大，文字发糊。
+   * DPI awareness 是进程级且只能设置一次，必须在任何 HWND 创建之前；
+   * wv_init 是首个原生入口，满足该约束。Per-Monitor v2 是 WebView2 推荐的
+   * 宿主级别（内容按当前显示器 DPI 渲染，跨屏拖动不重采样）。 */
+  {
+    HMODULE user32 = LoadLibraryW(L"user32.dll");
+    if (user32) {
+      typedef BOOL (*SetDpiAwarenessContextFn)(void*);
+      SetDpiAwarenessContextFn setAwareness = (SetDpiAwarenessContextFn)GetProcAddress(
+        user32, "SetProcessDpiAwarenessContext");
+      if (setAwareness) {
+        setAwareness((void*)-4L); /* DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 */
+      }
+      else {
+        /* Windows 10 1703 之前的系统：退回 shcore 的进程级 API。 */
+        HMODULE shcore = LoadLibraryW(L"shcore.dll");
+        if (shcore) {
+          typedef long (*SetProcessDpiAwarenessFn)(int);
+          SetProcessDpiAwarenessFn setPda = (SetProcessDpiAwarenessFn)GetProcAddress(
+            shcore, "SetProcessDpiAwareness");
+          if (setPda) setPda(2); /* PROCESS_PER_MONITOR_DPI_AWARE */
+        }
+      }
+    }
+  }
   CoInitializeEx(0, COINIT_APARTMENTTHREADED);
   return 1;
 }
