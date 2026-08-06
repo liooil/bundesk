@@ -504,7 +504,7 @@ https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 | 功能 | Windows | Linux | macOS | Termux (Android) |
 | --- | --- | --- | --- | --- |
 | HTTP server / 生命周期 | 支持 | 支持 | 支持 | 支持 |
-| Chromium App Mode 窗口 | 支持 | 支持 | 支持（含 Brave） | VIEW intent |
+| App Mode / WebView2 窗口 | 支持 / 支持 | 支持 / - | 支持 / -（含 Brave） | VIEW intent |
 | 安全单实例与参数转发 | 支持 | 支持 | 支持 | 支持 |
 | 单文件构建 / `.app` bundle | 单文件 EXE | 单文件 | `.app` bundle | n/a |
 | 交叉构建 | 任意平台 → EXE | 任意平台 → 单文件 | Linux/macOS → `.app` | n/a |

@@ -514,7 +514,7 @@ A custom mirror can be used via `runtime.downloadUrl`, and `runtime.sha256` pins
 | Feature | Windows | Linux | macOS | Termux (Android) |
 | --- | --- | --- | --- | --- |
 | HTTP server / lifecycle | Yes | Yes | Yes | Yes |
-| Chromium App Mode window | Yes | Yes | Yes (incl. Brave) | VIEW intent |
+| App Mode / WebView2 window | Yes / Yes | Yes / - | Yes / - (incl. Brave) | VIEW intent |
 | Secure single instance and argument forwarding | Yes | Yes | Yes | Yes |
 | Single-file build / `.app` bundle | single-file EXE | single file | `.app` bundle | n/a |
 | Cross-compilation | any platform → EXE | any platform → single file | Linux/macOS → `.app` | n/a |
