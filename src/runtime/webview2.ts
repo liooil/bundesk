@@ -3,7 +3,9 @@ import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import shimSource from '../webview2-shim.c' with { type: 'text' }
-import loaderBase64 from '../webview2-loader-b64'
+// The loader DLL ships as a real file; `bun build --compile` embeds it into the
+// single binary (asset), and the import resolves to the embedded file path.
+import loaderFile from '../webview2-loader.dll' with { type: 'file' }
 
 /**
  * WebView2 window provider (Windows) — SPIKE status.
@@ -13,12 +15,17 @@ import loaderBase64 from '../webview2-loader-b64'
  * needed: the single-file build story is preserved. Vtable layouts in the
  * shim are verified against the official WebView2.h.
  *
+ * The loader DLL is a real file (`src/webview2-loader.dll`) imported with
+ * `with { type: 'file' }`; `bun build --compile` embeds it as an asset into the
+ * single binary (verified: compiled EXE serves the identical 164704 bytes).
+ *
  * Verified working (2026-08-05, Windows 11, runtime 151.0.4129.59):
  * - tinycc compiles the shim at runtime and links kernel32/user32/ole32;
- * - the official WebView2Loader.dll (embedded base64) loads and discovers the
- *   runtime; environment and controller COM objects are created; their
+ * - the official WebView2Loader.dll loads and discovers the runtime;
+ *   environment and controller COM objects are created; their
  *   completed-handler callbacks arrive through the PeekMessageW pump;
- * - the runtime's per-user profile directory is created.
+ * - the runtime's per-user profile directory is created; close() is guarded
+ *   (controller Close() can crash on a runtime whose browser never attached).
  *
  * NOT working on this machine: navigation. `Navigate`/`NavigateToString`
  * return S_OK but the source stays `about:blank` and NavigationCompleted never
@@ -77,7 +84,7 @@ async function loadShim(): Promise<ShimSymbols> {
       await writeFile(sourcePath, shimSource, 'utf8')
       const library = cc({
         source: sourcePath,
-        library: ['kernel32', 'user32', 'ole32', 'advapi32'],
+        library: ['kernel32', 'user32', 'ole32', 'advapi32', 'psapi'],
         symbols: {
           set_handlers: { returns: 'void', args: ['ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'] },
           wv_init: { returns: 'i32', args: [] },
@@ -195,8 +202,9 @@ export async function createWebViewWindow(options: WebViewWindowOptions): Promis
     closeCallback.ptr as unknown as number,
   )
 
+  const loaderBytes = new Uint8Array(await Bun.file(loaderFile).arrayBuffer())
   const loaderPath = join(tmpdir(), `bundesk-webview2-loader-${process.pid}.dll`)
-  await writeFile(loaderPath, Buffer.from(loaderBase64, 'base64'))
+  await writeFile(loaderPath, loaderBytes)
 
   shim.wv_init()
   if (!shim.wv_use_loader(ptr(utf16(loaderPath)))) {
