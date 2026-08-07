@@ -241,7 +241,7 @@ behavior configured explicitly always wins.
 
 Resolution priority (highest first):
 
-1. CLI: `my-app --env=production` (or `--env production`)
+1. CLI: `my-app --mode=production` (or `--mode production`)
 2. `BUNDESK_ENV` env var — framework-specific override, so apps that need
    `NODE_ENV` for their own purposes can pin it independently
 3. `NODE_ENV` env var (standard)
@@ -263,7 +263,7 @@ What the mode currently drives:
   explicitly in the `server` option to pin it regardless of the mode.
 
 Values other than `development`/`production` are never consumed: a CLI
-`--env=staging` stays an app argument and a `NODE_ENV=staging` stays readable
+`--mode=staging` stays an app argument and a `NODE_ENV=staging` stays readable
 by the app — the framework only recognizes the two standard values.
 
 ## Platform integration

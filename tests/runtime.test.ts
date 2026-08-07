@@ -566,15 +566,15 @@ describe('app environment resolution', () => {
     expect(resolveAppEnvironment([], { packaged: false, env: { NODE_ENV: 'production', BUNDESK_ENV: 'development' } })).toBe('development')
     expect(resolveAppEnvironment([], { packaged: true, env: { NODE_ENV: 'development', BUNDESK_ENV: 'production' } })).toBe('production')
   })
-  it('CLI --env wins over every env var', () => {
-    expect(resolveAppEnvironment(['--env=production'], { packaged: false, env: { NODE_ENV: 'development', BUNDESK_ENV: 'development' } })).toBe('production')
-    expect(resolveAppEnvironment(['--env', 'development'], { packaged: true, env: { NODE_ENV: 'production', BUNDESK_ENV: 'production' } })).toBe('development')
+  it('CLI --mode wins over every env var', () => {
+    expect(resolveAppEnvironment(['--mode=production'], { packaged: false, env: { NODE_ENV: 'development', BUNDESK_ENV: 'development' } })).toBe('production')
+    expect(resolveAppEnvironment(['--mode', 'development'], { packaged: true, env: { NODE_ENV: 'production', BUNDESK_ENV: 'production' } })).toBe('development')
   })
   it('non-standard values are ignored, not consumed', () => {
-    expect(resolveAppEnvironment(['--env=staging'], { packaged: true, env: noEnv })).toBe('production')
+    expect(resolveAppEnvironment(['--mode=staging'], { packaged: true, env: noEnv })).toBe('production')
     expect(resolveAppEnvironment([], { packaged: false, env: { NODE_ENV: 'staging' } })).toBe('development')
     expect(resolveAppEnvironment([], { packaged: true, env: { BUNDESK_ENV: 'test' } })).toBe('production')
-    // app-owned args like --env=staging pass through untouched
-    expect(resolveAppEnvironment(['--env=staging', 'input.txt'], { packaged: false, env: noEnv })).toBe('development')
+    // app-owned args like --mode=staging pass through untouched
+    expect(resolveAppEnvironment(['--mode=staging', 'input.txt'], { packaged: false, env: noEnv })).toBe('development')
   })
 })

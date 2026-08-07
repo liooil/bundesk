@@ -239,7 +239,7 @@ curl -X POST http://127.0.0.1:PORT/api/actions/export \
 
 解析优先级（从高到低）：
 
-1. 命令行：`my-app --env=production`（或 `--env production`）
+1. 命令行：`my-app --mode=production`（或 `--mode production`）
 2. `BUNDESK_ENV` 环境变量——框架专用覆盖项，应用如需保留 `NODE_ENV` 给自己用，可独立钉住它
 3. `NODE_ENV` 环境变量（标准）
 4. 默认：**打包后的单二进制为 production，bun 宿主运行为 development**
@@ -256,7 +256,7 @@ onReady: (context) => {
 
 - `Bun.serve({ development })` —— 默认 `context.env === 'development'`（渲染错误页、上下文异常）。在 `server` 选项中显式设置 `development: false` 可无视模式钉死。
 
-非 `development`/`production` 的值永远不会被框架消费：命令行 `--env=staging` 仍是应用的参数，`NODE_ENV=staging` 也仍可被应用读取——框架只认这两个标准值。
+非 `development`/`production` 的值永远不会被框架消费：命令行 `--mode=staging` 仍是应用的参数，`NODE_ENV=staging` 也仍可被应用读取——框架只认这两个标准值。
 
 ## 平台集成
 
