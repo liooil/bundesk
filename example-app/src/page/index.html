@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>BunDesk Example App</title>
+    <link rel="stylesheet" href="./app.css" />
+  </head>
+  <body>
+    <main class="card">
+      <h1>BunDesk Example App</h1>
+      <dl class="info" id="info">
+        <div><dt>app id</dt><dd id="app-id">…</dd></div>
+        <div><dt>version</dt><dd id="app-version">…</dd></div>
+        <div><dt>environment</dt><dd id="app-env">…</dd></div>
+        <div><dt>platform</dt><dd id="app-platform">…</dd></div>
+        <div><dt>window provider</dt><dd id="app-provider">…</dd></div>
+        <div><dt>bridge</dt><dd id="bridge-state">…</dd></div>
+      </dl>
+      <div class="actions">
+        <button id="notify" disabled>Send notification</button>
+        <a class="button" href="/__bundesk/actions" target="_blank">Actions console (api + gui)</a>
+        <button id="reload">Reload page</button>
+      </div>
+      <p class="hint" id="hint">
+        The page is served by the fullstack pipeline: edit <code>src/page/app.ts</code> and
+        the window hot-reloads in development.
+      </p>
+    </main>
+    <script type="module" src="./app.ts"></script>
+  </body>
+</html>

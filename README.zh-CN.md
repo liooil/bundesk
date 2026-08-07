@@ -169,6 +169,26 @@ my-app upgrade [--force]       检查、安装升级并重启
 
 `register` 只写 `HKCU`，不要求管理员权限。`--default` 写当前用户的扩展名默认 ProgID，但不会绕过 Windows 的 `UserChoice` 保护。
 
+## 示例应用
+
+[`example-app/`](example-app/) 是可运行的功能展示应用,由 CI 流水线打包为各平台可执行文件(不随 npm 包发布)。它展示:
+
+- **全栈页面**(HTML import 路由——开发时热更新,编译产物 AOT)
+- **窗口 provider**:Windows 用 `webview`、Linux 用 `webkit`、其他平台 `browser`——运行时按 `process.platform` 选择
+- **三层 actions**:`example-app greet --name World`(cli)、`POST /api/actions/greet`(api)、自动生成的 console 页(gui)
+- **托盘**(Windows)、**通知**、**单实例**、**桌面集成**(`register` / `unregister` / `status`)、解析出的**运行环境**(`context.env`)
+- 供 CI 无头验证的 `--smoke` 模式(服务 + actions,不开窗口)
+
+```bash
+cd example-app
+bun run dev        # 打开桌面窗口(dev 环境,HMR 生效)
+bun run smoke      # 无头检查:服务 + actions,不开窗口
+bun run build      # 构建当前平台的产物
+bun run build:win  # 强制 Windows 目标
+```
+
+CI(`.github/workflows/ci.yml`)在各平台原生 runner 上构建(Windows x64、Linux x64、macOS arm64 + x64),并对源码与编译产物分别做冒烟测试。
+
 ## 组合式 API
 
 不使用一体化入口时，可以单独组合：

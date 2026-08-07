@@ -169,6 +169,36 @@ my-app upgrade [--force]       check for, install and restart after an upgrade
 
 `register` only writes `HKCU` and requires no administrator privileges. `--default` writes the per-user default ProgID for the extension, but does not bypass Windows' `UserChoice` protection.
 
+## Example app
+
+[`example-app/`](example-app/) is a runnable showcase of the framework,
+packaged into per-platform executables by the CI pipeline (it is not part of
+the npm package). It demonstrates:
+
+- a **fullstack page** (HTML import route — hot-reload in dev, AOT in the
+  compiled binary)
+- **window providers**: `webview` on Windows, `webkit` on Linux, `browser`
+  elsewhere — picked at runtime from `process.platform`
+- **actions** on all three layers: `example-app greet --name World` (cli),
+  `POST /api/actions/greet` (api), the generated console page (gui)
+- **tray** (Windows), **notifications**, **single instance**, **desktop
+  integration** (`register` / `unregister` / `status`), the resolved
+  **runtime environment** (`context.env`)
+- a headless `--smoke` mode used by CI to verify server + actions without a
+  display
+
+```bash
+cd example-app
+bun run dev        # open the desktop window (dev environment, HMR active)
+bun run smoke      # headless check: server + actions, no window
+bun run build      # build the executables for the current OS
+bun run build:win  # force a Windows target
+```
+
+CI (`.github/workflows/ci.yml`) builds each platform on its native runner
+(Windows x64, Linux x64, macOS arm64 + x64) and smoke-tests both the source
+and the compiled binary.
+
 ## Composable API
 
 When you don't use the all-in-one entrypoint, compose the pieces individually:

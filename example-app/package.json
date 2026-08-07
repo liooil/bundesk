@@ -1,0 +1,15 @@
+{
+  "name": "bundesk-example-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun src/main.ts",
+    "smoke": "bun src/main.ts --smoke",
+    "build": "bun ../src/cli.ts -c bundesk.config.ts",
+    "build:win": "bun ../src/cli.ts -c bundesk.config.ts -t bun-windows-x64",
+    "build:linux": "bun ../src/cli.ts -c bundesk.config.ts -t bun-linux-x64",
+    "build:macos": "bun ../src/cli.ts -c bundesk.config.ts -t bun-darwin-arm64",
+    "typecheck": "tsc --noEmit"
+  }
+}

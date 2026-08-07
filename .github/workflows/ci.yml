@@ -25,3 +25,41 @@ jobs:
       - run: bun run typecheck
       - run: bun test
       - run: bun run pack:check
+
+  # example-app: build a packaged executable per platform and smoke-test it
+  # (source-level smoke on every runner, compiled binary smoke where the
+  # runner can execute it).
+  example-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: cd example-app && bun run typecheck
+      - run: cd example-app && bun run smoke
+      - run: cd example-app && bun run build
+      - name: Smoke the compiled binary (Linux)
+        if: runner.os == 'Linux'
+        run: ./example-app/dist/example-app-linux --smoke
+      - name: Smoke the compiled binary (macOS)
+        if: runner.os == 'macOS'
+        run: ./example-app/dist/example-app-macos.app/Contents/MacOS/example-app-macos --smoke
+      - name: Smoke the compiled binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "example-app\dist\example-app.exe" -ArgumentList "--smoke" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { Write-Error "smoke failed (exit $($process.ExitCode))"; exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-app-${{ matrix.os }}
+          path: |
+            example-app/dist/*
+            !example-app/dist/*.sha256
+          if-no-files-found: error
