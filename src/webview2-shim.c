@@ -34,6 +34,7 @@ typedef unsigned short wchar_t; /* Windows wchar_t is 16-bit; C has no builtin *
 extern void* LoadLibraryW(const wchar_t*);
 extern void* GetProcAddress(void*, const char*);
 extern void* GetModuleHandleW(const wchar_t*);
+extern int GetModuleFileNameW(void*, wchar_t*, int);
 extern unsigned long GetCurrentProcessId(void);
 extern int WideCharToMultiByte(UINT, DWORD, const wchar_t*, int, char*, int, const char*, int*);
 extern long CoInitializeEx(void*, DWORD);
@@ -41,6 +42,8 @@ extern void CoUninitialize(void);
 extern unsigned short RegisterClassW(const void*);
 extern void* CreateWindowExW(UINT, const wchar_t*, const wchar_t*, DWORD, int, int, int, int, HWND, void*, HINSTANCE, void*);
 extern long DefWindowProcW(HWND, UINT, void*, void*);
+extern long SendMessageW(HWND, UINT, void*, void*);
+extern unsigned int ExtractIconExW(const wchar_t*, int, void**, void**, unsigned int);
 extern int DestroyWindow(HWND);
 extern int GetClientRect(HWND, void*);
 extern int SetWindowPos(HWND, HWND, int, int, int, int, unsigned int);
@@ -421,13 +424,21 @@ void* wv_create_window(int w, int h, const wchar_t* title) {
   HINSTANCE inst = GetModuleHandleW(0);
   wchar_t cls[64];
   wsprintfW(cls, L"BunDeskWV_%lu", GetCurrentProcessId());
+  /* exe 图标：任务栏会用 exe 的图标，但标题栏/Alt-Tab 需要类图标或
+   * WM_SETICON——类图标为 NULL 时标题栏显示空白默认图标。 */
+  void* iconBig = 0;
+  void* iconSmall = 0;
+  wchar_t exePath[260];
+  if (GetModuleFileNameW(0, exePath, 260) > 0) {
+    ExtractIconExW(exePath, 0, &iconBig, &iconSmall, 1);
+  }
   WNDCLASSW wc;
   wc.style = 0;
   wc.wndproc = (void*)wnd_proc;
   wc.cbClsExtra = 0;
   wc.cbWndExtra = 0;
   wc.hInstance = inst;
-  wc.hIcon = 0;
+  wc.hIcon = (void*)iconBig;
   wc.hCursor = 0;
   wc.hbrBg = 0;
   wc.menu = 0;
@@ -435,6 +446,11 @@ void* wv_create_window(int w, int h, const wchar_t* title) {
   RegisterClassW(&wc);
   g_hwnd = CreateWindowExW(0, cls, title, 0x00CF0000 /*WS_OVERLAPPEDWINDOW*/,
                            100, 100, w, h, 0, 0, inst, 0);
+  if (g_hwnd) {
+    /* ICON_BIG=1（标题栏/Alt-Tab 大图标）、ICON_SMALL=0（标题栏小图标） */
+    if (iconBig) SendMessageW(g_hwnd, 0x0080 /*WM_SETICON*/, (void*)1, iconBig);
+    if (iconSmall) SendMessageW(g_hwnd, 0x0080 /*WM_SETICON*/, 0, iconSmall);
+  }
   return (void*)g_hwnd;
 }
 

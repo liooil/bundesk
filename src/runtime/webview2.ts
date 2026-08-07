@@ -109,7 +109,7 @@ async function loadShim(): Promise<ShimSymbols> {
       const sourcePath = await materializeNativePath(shimPath, `bundesk-webview2-shim-${process.pid}.c`)
       const library = cc({
         source: sourcePath,
-        library: ['kernel32', 'user32', 'ole32', 'advapi32'],
+        library: ['kernel32', 'user32', 'ole32', 'advapi32', 'shell32'],
         symbols: {
           set_handlers: { returns: 'void', args: ['ptr', 'ptr', 'ptr', 'ptr', 'ptr', 'ptr'] },
           wv_init: { returns: 'i32', args: [] },
