@@ -266,6 +266,62 @@ Values other than `development`/`production` are never consumed: a CLI
 `--mode=staging` stays an app argument and a `NODE_ENV=staging` stays readable
 by the app — the framework only recognizes the two standard values.
 
+## Fullstack pages (HTML imports)
+
+Bun's bundler can serve a full frontend pipeline directly from HTML files:
+import an `.html` file and pass it as a route — Bun bundles every
+`<script>` and `<link>` tag (TypeScript/TSX/JSX/CSS), rewrites the markup to
+hashed asset URLs, and serves the result.
+
+```ts
+import dashboard from './src/dashboard.html'
+
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  server: {
+    port: 0,
+    routes: {
+      '/': dashboard,
+      '/api/data': () => Response.json({ ok: true }),
+    },
+  },
+  window: { provider: 'webview' },
+})
+```
+
+No custom frontend build script is needed — the page assets are part of the
+app's build graph (a `bundesk` compile emits the same assets ahead of time).
+
+### dev vs prod behavior
+
+The pipeline is switched by the runtime environment (see above): the
+framework's `development` default is exactly the switch Bun's fullstack
+server uses.
+
+| Feature | dev (`bun server/main.ts`) | prod (compiled binary) |
+| --- | --- | --- |
+| Asset bundling | re-bundled on every request | cached (dev) / AOT manifest (compiled) |
+| Source maps | ✅ | ❌ |
+| Minification | ❌ | ✅ |
+| Hot module reload | ✅ (WebSocket runtime woven into the client) | ❌ |
+| Error details | detailed | minimal |
+
+Verified on bun 1.3.14: dev responses carry `sourceMappingURL` and the HMR
+client; a compiled single binary serves `chunk-<hash>.js/css` minified.
+
+### The dev loop
+
+In development the desktop window (webview/webkit) loads the dev server, so
+frontend edits hot-reload into the open window — no app restart:
+
+```bash
+bun server/main.ts          # window opens, HMR active
+# edit src/dashboard.html / its scripts -> the window updates in place
+```
+
+Add `development: { console: true }` to the `server` option to echo the
+page's console.log to the terminal over the HMR connection.
+
 ## Platform integration
 
 ### Linux: XDG file associations and launcher

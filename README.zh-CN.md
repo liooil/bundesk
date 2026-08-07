@@ -258,6 +258,53 @@ onReady: (context) => {
 
 非 `development`/`production` 的值永远不会被框架消费：命令行 `--mode=staging` 仍是应用的参数，`NODE_ENV=staging` 也仍可被应用读取——框架只认这两个标准值。
 
+## 全栈页面（HTML imports）
+
+Bun 的打包器可以直接从 HTML 文件提供完整前端管线：import 一个 `.html` 文件并作为路由传入——Bun 会自动打包其中所有 `<script>` 与 `<link>` 标签（TypeScript/TSX/JSX/CSS），把标记重写为哈希资源 URL 并提供。
+
+```ts
+import dashboard from './src/dashboard.html'
+
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  server: {
+    port: 0,
+    routes: {
+      '/': dashboard,
+      '/api/data': () => Response.json({ ok: true }),
+    },
+  },
+  window: { provider: 'webview' },
+})
+```
+
+无需自定义前端打包脚本——页面资源属于应用的构建图（`bundesk` 编译时以 AOT 方式产出同一批资源）。
+
+### dev 与 prod 行为
+
+该管线由运行环境切换（见上节）：框架的 `development` 默认值正是 Bun 全栈服务器使用的开关。
+
+| 特性 | dev（`bun server/main.ts`） | prod（编译二进制） |
+| --- | --- | --- |
+| 资源打包 | 每次请求重新打包 | 缓存（dev 关闭时）/ AOT manifest（编译） |
+| Source map | ✅ | ❌ |
+| 压缩 | ❌ | ✅ |
+| 热模块替换 | ✅（WebSocket 运行时织入客户端） | ❌ |
+| 错误详情 | 详细 | 精简 |
+
+已在 bun 1.3.14 实测：dev 响应带 `sourceMappingURL` 与 HMR 客户端；编译单二进制输出压缩后的 `chunk-<hash>.js/css`。
+
+### 开发循环
+
+开发时桌面窗口（webview/webkit）加载 dev server，前端改动直接热更进已打开的窗口——无需重启应用：
+
+```bash
+bun server/main.ts          # 窗口打开，HMR 生效
+# 修改 src/dashboard.html 或其脚本 → 窗口就地更新
+```
+
+在 `server` 选项中加 `development: { console: true }`，可把页面 console.log 经 HMR 连接回显到终端。
+
 ## 平台集成
 
 ### Linux：XDG 文件关联与 launcher
