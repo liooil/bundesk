@@ -357,7 +357,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
 
     if (this.options.tray) {
       const trayOptions = this.options.tray
-      tray = createTray<WebSocketData>(trayOptions, {
+      tray = await createTray<WebSocketData>(trayOptions, {
         onActivate: () => {
           void (async () => {
             try {

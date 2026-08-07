@@ -51,9 +51,7 @@ const app = createDesktopApp({
   },
   singleInstance: {},
   notifications: true,
-  // The tray is currently implemented on Windows only; the framework throws
-  // on other platforms, so the option is configured conditionally.
-  tray: process.platform === 'win32' ? {
+  tray: {
     tooltip: 'BunDesk Example App',
     menu: [
       { label: 'Open window', onClick: (context) => { void context.launchWindow() } },
@@ -61,7 +59,7 @@ const app = createDesktopApp({
       { label: '', separator: true },
       { label: 'Quit', onClick: (context) => void context.stop() },
     ],
-  } : undefined,
+  },
   desktopIntegration: {
     startMenuShortcut: { name: 'bundesk-example-app', description: 'BunDesk framework example app' },
     fileAssociations: [{

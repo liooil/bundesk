@@ -2,6 +2,7 @@ import type { DesktopAppContext } from './app'
 import { isTermux } from './platform'
 import type { Win32TrayHandle } from './tray-win32'
 import { createWin32Tray } from './tray-win32'
+import { createLinuxTray } from './tray-linux'
 
 /**
  * System tray support.
@@ -39,10 +40,10 @@ export interface TrayController<WebSocketData = undefined> {
   destroy(): void
 }
 
-export function createTray<WebSocketData = undefined>(
+export async function createTray<WebSocketData = undefined>(
   options: DesktopTrayOptions<WebSocketData>,
   callbacks: { onActivate: () => void; onMenuClick: (item: TrayMenuItem<WebSocketData>) => void },
-): TrayController<WebSocketData> | null {
+): Promise<TrayController<WebSocketData> | null> {
   if (process.platform === 'win32') {
     let currentMenu: TrayMenuItem<WebSocketData>[] = options.menu ?? [] as TrayMenuItem<WebSocketData>[]
     const handle: Win32TrayHandle | null = createWin32Tray({
@@ -71,12 +72,18 @@ export function createTray<WebSocketData = undefined>(
     }
   }
 
-  if (isTermux()) {
-    throw new Error('System tray is not available on Termux (Android has no tray concept)')
+  if (process.platform === 'linux') {
+    return createLinuxTray(options, callbacks)
   }
-  throw new Error(
-    `System tray is not implemented for ${process.platform} yet: ` +
-      'Windows works via Win32 FFI; macOS needs AppKit NSStatusItem through FFI; ' +
-      'Linux needs StatusNotifierItem over D-Bus',
+  if (isTermux()) {
+    console.warn('[BunDesk] System tray is not available on Termux (Android has no tray concept)')
+    return null
+  }
+  // Unsupported platforms degrade gracefully instead of throwing, so
+  // cross-platform apps can configure a tray unconditionally.
+  console.warn(
+    `[BunDesk] System tray is not implemented for ${process.platform} yet ` +
+      '(macOS needs AppKit NSStatusItem through FFI); running without a tray',
   )
+  return null
 }

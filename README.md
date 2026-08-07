@@ -181,7 +181,7 @@ the npm package). It demonstrates:
   elsewhere — picked at runtime from `process.platform`
 - **actions** on all three layers: `example-app greet --name World` (cli),
   `POST /api/actions/greet` (api), the generated console page (gui)
-- **tray** (Windows), **notifications**, **single instance**, **desktop
+- **tray** (Windows + Linux), **notifications**, **single instance**, **desktop
   integration** (`register` / `unregister` / `status`), the resolved
   **runtime environment** (`context.env`)
 - a headless `--smoke` mode used by CI to verify server + actions without a
@@ -459,8 +459,8 @@ Platform status:
 | Platform | Status | Mechanism |
 | --- | --- | --- |
 | Windows | **Implemented** | pure `bun:ffi` against user32/shell32: `Shell_NotifyIconW` + hidden window + 50ms message pump, no native toolchain |
+| Linux | **Implemented** | StatusNotifierItem over D-Bus: pure JS D-Bus client (EXTERNAL auth, wire codec) + com.canonical.dbusmenu; requires a session bus and a StatusNotifierItem-capable host (KDE/XFCE/GNOME + AppIndicator); unsupported daemons degrade to no tray |
 | macOS | Not implemented | AppKit `NSStatusItem` via `objc_msgSend` FFI (needs NSApplication/run-loop cooperation; feasible but fragile) |
-| Linux | Not implemented | StatusNotifierItem D-Bus protocol (pure JS D-Bus client + DBusMenu) |
 | Termux | Not supported | Android has no tray concept |
 
 On Windows, newly registered icons may first appear in the overflow area (Windows default behavior); users can drag them into the main tray. `iconPresent()` returns false per spec for icons hidden in the overflow area.

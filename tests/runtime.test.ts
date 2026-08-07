@@ -20,6 +20,7 @@ import {
   staticBinaryProvider,
   unregisterLinuxIntegration,
   windowsToastScript,
+  createLinuxTray,
 } from '../src/index'
 import type { DesktopAppOptions, DesktopAppSession, LinuxIntegrationOptions, SecondInstanceEvent } from '../src/index'
 
@@ -577,4 +578,45 @@ describe('app environment resolution', () => {
     // app-owned args like --mode=staging pass through untouched
     expect(resolveAppEnvironment(['--mode=staging', 'input.txt'], { packaged: false, env: noEnv })).toBe('development')
   })
+})
+
+describe('dbus codec', () => {
+  const roundTrip = (signature: string, values: unknown[]): unknown[] => {
+    const { encodeBody, decodeBody } = require('../src/runtime/dbus') as typeof import('../src/runtime/dbus')
+    return decodeBody(encodeBody(signature, values), signature)
+  }
+  it('round-trips strings, numbers and booleans', () => {
+    expect(roundTrip('sib', ['hello', -42, true])).toEqual(['hello', -42, true])
+  })
+  it('round-trips dicts a{sv} with variant values', () => {
+    const entries = [['label', ['s', 'Open']], ['enabled', ['b', true]]] as [string, [string, unknown]][]
+    expect(roundTrip('a{sv}', [entries])).toEqual([entries])
+  })
+  it('round-trips nested menu layout (ia{sv}av)', () => {
+    const layout = [[1, [['label', ['s', 'Item']]] as [string, [string, unknown]][], []]]
+    expect(roundTrip('a(ia{sv}av)', [layout])).toEqual([layout])
+  })
+  it('round-trips icon pixmaps a(iiay)', () => {
+    const pixmap = [[2, 2, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]]]
+    expect(roundTrip('a(iiay)', [pixmap])).toEqual([pixmap])
+  })
+  it('round-trips tooltips (ssa(iiay))', () => {
+    expect(roundTrip('(ssa(iiay))', [['', 'tip', []]])).toEqual([['', 'tip', []]])
+  })
+})
+
+describe('linux tray (StatusNotifierItem)', () => {
+  const hasSessionBus = Boolean(process.env.DBUS_SESSION_BUS_ADDRESS || process.env.XDG_RUNTIME_DIR)
+  it.skipIf(!hasSessionBus)('registers, updates and destroys on a live session bus', async () => {
+    const { createLinuxTray } = await import('../src/runtime/tray-linux')
+    const tray = createLinuxTray<unknown>(
+      { tooltip: 'suite-test', menu: [{ label: 'Item' }] },
+      { onActivate: () => {}, onMenuClick: () => {} },
+    )
+    expect(tray).not.toBeNull()
+    await Bun.sleep(1200) // allow the async D-Bus connection + registration
+    tray!.update({ tooltip: 'updated', menu: [{ label: 'Only' }] })
+    await Bun.sleep(300)
+    tray!.destroy()
+  }, 15_000)
 })

@@ -62,7 +62,7 @@ BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要
 - 静态二进制 URL/ETag/SHA-256 和 GitHub Releases 两种升级 provider；
 - 下载校验、原子替换、失败回滚、重启和旧版本清理；
 - 系统通知（Windows WinRT toast，经 PowerShell 桥；Linux notify-send / macOS osascript / Termux termux-notification）；
-- 系统托盘（Windows 已实现：纯 bun:ffi 调 Win32，无原生编译）；
+- 系统托盘（Windows 已实现：纯 bun:ffi 调 Win32；Linux 已实现：StatusNotifierItem over D-Bus 纯 JS 客户端；均无原生编译）；
 - 服务注册（headless `serve` 常驻）：Windows HKCU Run key、Linux systemd user unit、macOS launchd LaunchAgent、Termux boot 脚本；
 - Windows 当前用户文件关联、默认打开方式和开始菜单快捷方式；
 - Linux XDG 文件关联、desktop entry 和 mimeapps 注册（register/unregister/status）；
@@ -176,7 +176,7 @@ my-app upgrade [--force]       检查、安装升级并重启
 - **全栈页面**(HTML import 路由——开发时热更新,编译产物 AOT)
 - **窗口 provider**:Windows 用 `webview`、Linux 用 `webkit`、其他平台 `browser`——运行时按 `process.platform` 选择
 - **三层 actions**:`example-app greet --name World`(cli)、`POST /api/actions/greet`(api)、自动生成的 console 页(gui)
-- **托盘**(Windows)、**通知**、**单实例**、**桌面集成**(`register` / `unregister` / `status`)、解析出的**运行环境**(`context.env`)
+- **托盘**(Windows + Linux)、**通知**、**单实例**、**桌面集成**(`register` / `unregister` / `status`)、解析出的**运行环境**(`context.env`)
 - 供 CI 无头验证的 `--smoke` 模式(服务 + actions,不开窗口)
 
 ```bash
@@ -433,7 +433,7 @@ const app = createDesktopApp({
 | --- | --- | --- |
 | Windows | **已实现** | 纯 `bun:ffi` 调 user32/shell32：`Shell_NotifyIconW` + 隐藏窗口 + 50ms 消息泵，无原生工具链 |
 | macOS | 未实现 | AppKit `NSStatusItem` 经 `objc_msgSend` FFI（需 NSApplication/run-loop 配合，可行但脆弱） |
-| Linux | 未实现 | StatusNotifierItem D-Bus 协议（纯 JS D-Bus 客户端 + DBusMenu） |
+| Linux | **已实现** | StatusNotifierItem over D-Bus：纯 JS D-Bus 客户端（EXTERNAL 认证、wire 编解码）+ com.canonical.dbusmenu；需 session bus 与支持 SNI 的宿主（KDE/XFCE/GNOME + AppIndicator）；不支持的 daemon 优雅降级为无托盘 |
 | Termux | 不支持 | Android 无托盘概念 |
 
 Windows 上新注册的图标可能先出现在溢出区（Windows 默认行为），用户拖到主托盘即可；`iconPresent()` 探测对溢出区隐藏图标按文档返回 false。
