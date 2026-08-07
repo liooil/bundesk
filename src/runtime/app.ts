@@ -28,6 +28,7 @@ import { getServiceStatus, installService, uninstallService } from './service-in
 import { notifySystem, type DesktopNotificationOptions } from './notifications'
 import { createTray, type DesktopTrayOptions, type TrayController } from './tray'
 import { isTermux } from './platform'
+import { resolveAppEnvironment, type AppEnvironment } from './environment'
 import {
   getWindowsIntegrationStatus,
   registerWindowsIntegration,
@@ -93,6 +94,8 @@ export interface DesktopAppOptions<WebSocketData = undefined, Routes extends str
 export interface DesktopAppContext<WebSocketData = undefined> {
   server: Bun.Server<WebSocketData>
   url: URL
+  /** Resolved app environment ('development' | 'production'); CLI > BUNDESK_ENV > NODE_ENV > default. */
+  env: AppEnvironment
   window: DesktopAppWindow | null
   updater: Updater | null
   actions: ActionRegistry
@@ -149,6 +152,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
     })
 
     const parsed = registry.has(args[0] ?? '') ? parseActionModeArgs(args) : parseRuntimeArgs(args)
+    const env = resolveAppEnvironment(args)
     if (parsed.afterUpdate) {
       await cleanupAfterUpdate({ waitForPid: parsed.waitForPid })
     }
@@ -234,6 +238,8 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
 
     const serverOptions = withActionRoutes({
       ...this.options.server,
+      // Mode fills the default only; an explicit user setting always wins.
+      development: this.options.server.development ?? env === 'development',
       hostname: parsed.host ?? ('hostname' in this.options.server ? this.options.server.hostname : undefined),
       port: parsed.port ?? ('port' in this.options.server ? this.options.server.port : undefined),
     } as Bun.Serve.Options<WebSocketData, Routes>, registry)
@@ -323,6 +329,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       kind: 'primary',
       server,
       url: appUrl,
+      env,
       window: appWindow,
       updater,
       actions: registry,

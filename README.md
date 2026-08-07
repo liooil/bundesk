@@ -233,6 +233,39 @@ Behavioral conventions:
 - When the `server` config uses `routes`, the framework automatically merges in the three reserved paths `/api/actions`, `/api/actions/:name` and `/__bundesk/actions`; with a `fetch` fallback and no `routes`, they are not auto-mounted, but `context.actions` and the CLI layer are unaffected. The actions API binds together with the server by default (127.0.0.1 by default) — do not expose the hostname on 0.0.0.0 without authentication.
 - Action names must be kebab-case and must not collide with framework commands (`serve`, `register`, `unregister`, `status`, `upgrade`).
 
+## Runtime environment (development / production)
+
+The framework resolves an app environment and exposes it as `context.env`
+(`'development' | 'production'`). The mode only fills **defaults** — any
+behavior configured explicitly always wins.
+
+Resolution priority (highest first):
+
+1. CLI: `my-app --env=production` (or `--env production`)
+2. `BUNDESK_ENV` env var — framework-specific override, so apps that need
+   `NODE_ENV` for their own purposes can pin it independently
+3. `NODE_ENV` env var (standard)
+4. Default: **production** when the process is a compiled single binary,
+   **development** when running under bun
+
+```ts
+onReady: (context) => {
+  if (context.env === 'production') {
+    // minimal logging, no debug endpoints, ...
+  }
+}
+```
+
+What the mode currently drives:
+
+- `Bun.serve({ development })` — defaults to `context.env === 'development'`
+  (rendered error pages, contextual exceptions). Set `development: false`
+  explicitly in the `server` option to pin it regardless of the mode.
+
+Values other than `development`/`production` are never consumed: a CLI
+`--env=staging` stays an app argument and a `NODE_ENV=staging` stays readable
+by the app — the framework only recognizes the two standard values.
+
 ## Platform integration
 
 ### Linux: XDG file associations and launcher

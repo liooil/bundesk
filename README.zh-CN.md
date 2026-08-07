@@ -233,6 +233,31 @@ curl -X POST http://127.0.0.1:PORT/api/actions/export \
 - `server` 配置使用 `routes` 时，框架自动合并 `/api/actions`、`/api/actions/:name`、`/__bundesk/actions` 三个保留路径；使用 `fetch` 兜底且没有 `routes` 时不会自动挂载，但 `context.actions` 与 CLI 层不受影响。actions API 默认随 server 绑定（默认 127.0.0.1），请勿在无鉴权时把 hostname 暴露到 0.0.0.0。
 - action 名必须是 kebab-case，且不能与框架命令（`serve`、`register`、`unregister`、`status`、`upgrade`）重名。
 
+## 运行环境（development / production）
+
+框架解析应用环境并以 `context.env`（`'development' | 'production'`）暴露。该模式只填充**默认值**——任何显式配置的行为始终优先。
+
+解析优先级（从高到低）：
+
+1. 命令行：`my-app --env=production`（或 `--env production`）
+2. `BUNDESK_ENV` 环境变量——框架专用覆盖项，应用如需保留 `NODE_ENV` 给自己用，可独立钉住它
+3. `NODE_ENV` 环境变量（标准）
+4. 默认：**打包后的单二进制为 production，bun 宿主运行为 development**
+
+```ts
+onReady: (context) => {
+  if (context.env === 'production') {
+    // 精简日志、关闭调试端点、……
+  }
+}
+```
+
+当前该模式驱动：
+
+- `Bun.serve({ development })` —— 默认 `context.env === 'development'`（渲染错误页、上下文异常）。在 `server` 选项中显式设置 `development: false` 可无视模式钉死。
+
+非 `development`/`production` 的值永远不会被框架消费：命令行 `--env=staging` 仍是应用的参数，`NODE_ENV=staging` 也仍可被应用读取——框架只认这两个标准值。
+
 ## 平台集成
 
 ### Linux：XDG 文件关联与 launcher
