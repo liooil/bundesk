@@ -57,7 +57,7 @@ const base = {
   entrypoint: 'src/main.ts',
   minify: true,
   define: {
-    __EXAMPLE_APP_VERSION__: JSON.stringify('0.1.0'),
+    __EXAMPLE_APP_VERSION__: JSON.stringify('0.2.0'),
   },
 }
 
@@ -70,7 +70,7 @@ const windowsConfig: DesktopAppConfig = {
     icon: windowsIcon,
     title: 'BunDesk Example App',
     publisher: 'BunDesk',
-    version: '0.1.0',
+    version: '0.2.0',
     description: 'BunDesk framework example app',
     copyright: 'Copyright (C) 2026 BunDesk',
   },

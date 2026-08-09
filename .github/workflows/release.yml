@@ -8,7 +8,8 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  # npm tarball of the bundesk framework itself
+  package:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -20,10 +21,70 @@ jobs:
       - run: bun test
       - run: mkdir artifacts
       - run: bun pm pack --filename artifacts/bundesk.tgz
-      - run: sha256sum artifacts/bundesk.tgz > artifacts/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-bundesk
+          path: artifacts/*
+
+  # example-app: build every target on its native runner (the bundesk config
+  # exports only native targets per platform; macOS hosts both darwin builds
+  # for the ad-hoc codesign in the .app bundles), smoke the binaries that can
+  # run on the runner, and archive the .app bundles into zips for upload.
+  example-build:
+    name: example-app (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - run: cd example-app && bun run typecheck
+      - run: cd example-app && bun run build
+      - name: Smoke the compiled binary (Linux)
+        if: runner.os == 'Linux'
+        run: ./example-app/dist/example-app-linux --smoke
+      - name: Smoke the compiled binary (macOS)
+        if: runner.os == 'macOS'
+        run: ./example-app/dist/example-app-macos.app/Contents/MacOS/example-app-macos --smoke
+      - name: Smoke the compiled binary (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $process = Start-Process -FilePath "example-app\dist\example-app.exe" -ArgumentList "--smoke" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { Write-Error "smoke failed (exit $($process.ExitCode))"; exit 1 }
+      - name: Archive macOS app bundles
+        if: runner.os == 'macOS'
+        run: |
+          cd example-app/dist
+          ditto -c -k --keepParent example-app-macos.app example-app-macos-arm64.zip
+          ditto -c -k --keepParent example-app-macos-x64.app example-app-macos-x64.zip
+          rm -rf example-app-macos.app example-app-macos-x64.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-app-${{ matrix.os }}
+          path: |
+            example-app/dist/*
+            !example-app/dist/*.sha256
+          if-no-files-found: error
+
+  # Single release asset upload so the release is created exactly once, after
+  # every build has succeeded.
+  release:
+    needs: [package, example-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Checksums
+        run: cd release-assets && sha256sum * > SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
-          files: |
-            artifacts/bundesk.tgz
-            artifacts/SHA256SUMS.txt
+          files: release-assets/*

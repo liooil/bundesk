@@ -13,7 +13,7 @@ import page from './page/index.html'
 declare const __EXAMPLE_APP_VERSION__: string
 
 const APP_ID = 'com.bundesk.example-app'
-const VERSION = typeof __EXAMPLE_APP_VERSION__ === 'string' ? __EXAMPLE_APP_VERSION__ : '0.1.0-dev'
+const VERSION = typeof __EXAMPLE_APP_VERSION__ === 'string' ? __EXAMPLE_APP_VERSION__ : '0.2.0-dev'
 
 // The window's onMessage fires before onReady has provided the context;
 // route notifications through a mutable holder instead.
