@@ -6,6 +6,9 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
   # npm tarball of the bundesk framework itself
@@ -84,6 +87,10 @@ jobs:
           merge-multiple: true
       - name: Checksums
         run: cd release-assets && sha256sum * > SHA256SUMS.txt
+      - name: Attest release assets (build provenance)
+        uses: actions/attest@v4
+        with:
+          subject-path: release-assets/*
       - uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
