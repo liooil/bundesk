@@ -2,9 +2,9 @@
 
 > **English** · [中文](README.zh-CN.md)
 
-**用 Bun 和系统 Chromium，把本地 Web 应用变成启动快、构建快、容易调试的桌面应用。**
+**用 Bun 和系统浏览器，把本地 Web 应用变成启动快、构建快、容易调试的桌面应用。**
 
-BunDesk 是一个面向 Bun 的桌面应用框架，而不只是 EXE 打包脚本。名称由 **Bun + Desktop** 组成。框架统一处理 HTTP server、Edge/Chrome App Mode 窗口、单实例、自动升级、Windows 文件关联与开始菜单集成，同时保留底层组合式 API。
+BunDesk 是一个面向 Bun 的桌面应用框架，而不只是 EXE 打包脚本。名称由 **Bun + Desktop** 组成。框架统一处理 HTTP server、浏览器窗口、单实例、自动升级、Windows 文件关联与开始菜单集成，同时保留底层组合式 API。
 
 ## 为什么是 BunDesk
 
@@ -24,7 +24,7 @@ BunDesk 将 Bun runtime、server 和由入口导入的前端资源编进同一�
 开发时应用就是普通 Bun HTTP server 和普通网页：
 
 - server 代码直接由 Bun 运行，可使用现有 TypeScript 调试方式；
-- UI 使用 Edge/Chrome DevTools，不经过自定义 WebView 调试桥；
+- UI 使用浏览器自带 DevTools，不经过自定义调试桥；
 - `--no-browser` 可只启动 server，再用任意浏览器或 API 客户端调试；
 - 应用 routes、Bun 插件、Vite/Tailwind 和 Worker 构建逻辑都留在应用仓库中。
 
@@ -36,7 +36,7 @@ BunDesk 将 Bun runtime、server 和由入口导入的前端资源编进同一�
 
 ### 不附带 Chromium
 
-运行时使用系统已经安装的 Microsoft Edge、Google Chrome 或 Chromium，并以 `--app=<url>` 打开独立应用窗口。代价是目标机器必须有兼容浏览器；收益是更小的发布物、更少的 renderer 更新负担和更短的打包链路。
+运行时优先使用系统已安装的 Microsoft Edge、Google Chrome 或 Chromium，并以 `--app=<url>` 打开独立应用窗口；未找到时使用隔离且可跟踪的 profile 启动 Firefox，最后才回退到系统 URL opener。每次选择或失败都会输出日志。收益是更小的发布物、更少的 renderer 更新负担和更短的打包链路。
 
 ## 与 Electron / Tauri 的定位
 
@@ -155,7 +155,12 @@ await app.run()
 框架保留以下应用命令：
 
 ```text
-my-app                         启动 server 和 App Mode 窗口
+my-app                         启动 server 和浏览器窗口
+my-app --help                  显示根据配置与 actions 生成的帮助并退出
+my-app --version               显示应用名称和版本并退出
+my-app --browser               强制使用系统浏览器 provider
+my-app --webview               强制使用当前平台的进程内 WebView
+my-app --provider browser      显式选择 browser（也可设为 webview）
 my-app <file>                  启动或把文件参数转发给主实例
 my-app serve --no-browser      只启动 HTTP server
 my-app register [--default]    注册当前用户文件关联和 launcher
@@ -166,6 +171,8 @@ my-app uninstall-service       移除服务注册
 my-app service-status          查看服务状态
 my-app upgrade [--force]       检查、安装升级并重启
 ```
+
+`-h` 等价于 `--help`，`-V` 等价于 `--version`。可用 `cli.name`、`cli.description` 和 `cli.options` 定制帮助中显示的名称、说明和应用专属选项；框架命令与 actions 会自动列出。
 
 `register` 只写 `HKCU`，不要求管理员权限。`--default` 写当前用户的扩展名默认 ProgID，但不会绕过 Windows 的 `UserChoice` 保护。
 
@@ -198,6 +205,7 @@ import {
   acquireSingleInstance,
   createUpdater,
   findChromiumBrowser,
+  findFirefoxBrowser,
   launchAppWindow,
   registerWindowsIntegration,
   staticBinaryProvider,
@@ -497,16 +505,18 @@ const app = createDesktopApp({
 - 实现：无头文件 C shim（COM vtable 布局对照官方 WebView2.h 校验）由 Bun 内嵌 TinyCC 运行时编译。刻意不使用官方 WebView2Loader.dll：shim 从 EdgeUpdate 注册表键读取运行时安装路径，直接调用 `EmbeddedBrowserWebView.dll` 的 `CreateWebViewEnvironmentWithOptionsInternal` 导出。该导出非文档化但事实上 ABI 稳定——它正是官方 loader 自身依赖的同一导出（loader 的环境创建路径就是 GetProcAddress 此导出加一次直调），冻结的二进制无论内嵌 loader 还是本 shim，失败方式完全相同——无原生工具链、无下载二进制，单二进制构建保留。
 - 应用提供的页面必须设置真实的 `content-type`（`text/html`）；否则页面按纯文本渲染。
 
-各平台窗口 provider（`provider: 'browser'` 为默认，全平台可用，以系统浏览器 App Mode 启动）：
+各平台窗口 provider（`provider: 'browser'` 为默认，全平台可用；优先使用 Chromium App Mode，未找到时回退到隔离的 Firefox 窗口）：
+
+CLI 可用 `--browser` / `--webview`（或 `--provider browser|webview`）覆盖配置。CLI 的 `webview` 是跨平台抽象：Windows 映射为 `webview`，Linux 映射为 `webkit`；不支持进程内 WebView 的平台会直接报错。`--no-browser` 仍表示不打开任何窗口。配置文件中的 `window.provider` 使用下表的原始 provider 名称。
 
 | 平台 | 进程内 provider | 状态 | 机制 |
 | --- | --- | --- | --- |
 | Windows | `webview`（WebView2） | **已实现** | 内嵌 TinyCC 编译的 C shim；直调运行时 `EmbeddedBrowserWebView.dll`（无 loader 二进制） |
-| Linux | `webkit`（WebKitGTK） | **已实现** | `webkit2gtk-4.1` C API shim，内嵌 TinyCC 编译（`run_javascript` → `executeScript`，`script-message-received` → `onMessage`）；GTK3/GTK4 两种 webkit 构建均支持（运行时探测底座）；需系统装有 WebKitGTK 栈（如 `pacman -S webkit2gtk-4.1` / `apt install libwebkit2gtk-4.1-0`），否则回落到 `browser`；WSLg 下需设 `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`（GPU 初始化失败时再加 `LIBGL_ALWAYS_SOFTWARE=1`） |
+| Linux | `webkit`（WebKitGTK） | **已实现** | `webkit2gtk-4.1` C API shim，内嵌 TinyCC 编译（`run_javascript` → `executeScript`，`script-message-received` → `onMessage`）；GTK3/GTK4 两种 webkit 构建均支持（运行时探测底座）；需系统装有 WebKitGTK 栈（如 `pacman -S webkit2gtk-4.1` / `apt install libwebkit2gtk-4.1-0`）；Wayland 下默认禁用 DMA-BUF renderer 以兼容 GBM（启动前设 `WEBKIT_DISABLE_DMABUF_RENDERER=0` 可覆盖）；WSLg 下需设 `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`（GPU 初始化失败时再加 `LIBGL_ALWAYS_SOFTWARE=1`） |
 | macOS | `wkwebview`（WKWebView） | 未实现 | `objc_msgSend` FFI shim；可行但最脆弱（ObjC block、NSApplication run loop） |
 | Termux | — | 不支持 | Android 无 shell 进程可用的 WebView API；嵌入式 WebView 需构建 APK。VIEW intent（`browser`）是既定路径 |
 
-非 Windows 平台设置 `window.provider = 'webview'` 会抛错。
+非 Windows 平台在配置中设置 `window.provider = 'webview'` 会抛错；Linux 配置应使用 `webkit`，但 CLI 仍使用统一的 `--webview`。
 
 ## 自动升级
 
@@ -606,14 +616,14 @@ https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 | 功能 | Windows | Linux | macOS | Termux (Android) |
 | --- | --- | --- | --- | --- |
 | HTTP server / 生命周期 | 支持 | 支持 | 支持 | 支持 |
-| App Mode / WebView2 窗口 | 支持 / 支持 | 支持 / - | 支持 / -（含 Brave） | VIEW intent |
+| 浏览器 / 进程内 WebView 窗口 | 支持 / 支持 | 支持 / 支持（WebKitGTK） | 支持 / 不支持 | VIEW intent / 不支持 |
 | 安全单实例与参数转发 | 支持 | 支持 | 支持 | 支持 |
 | 单文件构建 / `.app` bundle | 单文件 EXE | 单文件 | `.app` bundle | n/a |
 | 交叉构建 | 任意平台 → EXE | 任意平台 → 单文件 | Linux/macOS → `.app` | n/a |
 | 自动替换当前可执行文件 | 支持 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用，0.1 不作桌面发布承诺 | 底层 API 可用 |
 | 文件关联 / launcher | 支持（HKCU） | 支持（XDG） | 构建期 Info.plist | 不支持 |
 | 服务注册（headless serve） | HKCU Run key | systemd user | launchd agent | termux-boot |
-| 系统托盘 | 支持（Win32 FFI） | 计划（SNI D-Bus） | 计划（AppKit FFI） | 不支持 |
+| 系统托盘 | 支持（Win32 FFI） | 支持（SNI D-Bus） | 计划（AppKit FFI） | 不支持 |
 | 系统通知 | WinRT toast（PowerShell 桥） | notify-send | osascript | termux-notification |
 
 Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`windows`/`runtime` 构建选项要求 `bun-windows-*` 目标，`macos` 选项要求 `bun-darwin-*` 目标且 `outfile` 以 `.app` 结尾。

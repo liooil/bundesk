@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'bun:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -7,12 +7,14 @@ import {
   createUpdater,
   createWin32Tray,
   findChromiumBrowser,
+  findFirefoxBrowser,
   githubReleaseProvider,
   getLinuxIntegrationStatus,
   installService,
   launchAppWindow,
   registerLinuxIntegration,
   registerWindowsIntegration,
+  resolveCliWindowProvider,
   renderLaunchdPlist,
   renderSystemdUnit,
   renderTermuxBootScript,
@@ -31,6 +33,84 @@ afterAll(async () => {
 })
 
 describe('desktop runtime', () => {
+  it('prints generated help and version without starting the application', async () => {
+    const app = createDesktopApp({
+      id: 'dev.bundesk.cli-test',
+      version: '1.2.3',
+      cli: {
+        name: 'cli-test',
+        description: 'CLI test application',
+        options: [{ flags: '--smoke', description: 'Run a smoke check' }],
+      },
+      server: { port: 0, fetch: () => new Response('must not start') },
+      window: false,
+      singleInstance: false,
+      actions: [{
+        name: 'greet',
+        description: 'Greet someone',
+        args: [{ name: 'name', type: 'string', required: true }],
+        handler: ({ name }) => ({ name }),
+      }],
+    })
+
+    const help = await app.start(['--help'])
+    expect(help.kind).toBe('command')
+    if (help.kind === 'command') {
+      expect(help.command).toBe('help')
+      expect(help.result).toContain('Usage: cli-test [command] [options]')
+      expect(help.result).toContain('greet --name <string>')
+      expect(help.result).toContain('--smoke')
+      expect(help.result).toContain('--provider <provider>')
+    }
+
+    const shortHelp = await app.start(['-h'])
+    expect(shortHelp.kind === 'command' && shortHelp.command).toBe('help')
+
+    const version = await app.start(['--version'])
+    expect(version).toEqual({ kind: 'command', command: 'version', result: 'cli-test 1.2.3' })
+    const shortVersion = await app.start(['-V'])
+    expect(shortVersion).toEqual(version)
+  })
+
+  it('selects browser or the platform-native webview from CLI options', async () => {
+    expect(resolveCliWindowProvider('browser', 'linux')).toBe('browser')
+    expect(resolveCliWindowProvider('webview', 'win32')).toBe('webview')
+    expect(resolveCliWindowProvider('webview', 'linux')).toBe('webkit')
+    expect(() => resolveCliWindowProvider('webview', 'darwin')).toThrow('not available')
+
+    const profile = await mkdtemp(join(tmpdir(), 'bundesk-browser-cli-'))
+    temporaryDirectories.push(profile)
+    for (const [index, args] of [['--browser'], ['--provider', 'browser'], ['--provider=browser']].entries()) {
+      const app = createDesktopApp({
+        id: `runtime-browser-cli-${process.pid}-${index}`,
+        server: { port: 0, fetch: () => new Response('ok') },
+        window: {
+          provider: 'webview',
+          preferred: process.execPath,
+          userDataDir: join(profile, String(index)),
+          inheritOutput: false,
+        },
+        singleInstance: false,
+      })
+      const session = await app.start(args)
+      expect(session.kind).toBe('primary')
+      if (session.kind !== 'primary') throw new Error('Expected a primary session')
+      expect(session.windowProvider).toBe('browser')
+      expect(session.window).not.toBeNull()
+      expect(session.window && 'executeScript' in session.window).toBe(false)
+      await session.stop()
+    }
+
+    const invalid = createDesktopApp({
+      id: `runtime-browser-cli-invalid-${process.pid}`,
+      server: { port: 0, fetch: () => new Response('must not start') },
+      window: false,
+      singleInstance: false,
+    })
+    await expect(invalid.start(['--provider', 'native'])).rejects.toThrow('expected browser or webview')
+    await expect(invalid.start(['--provider'])).rejects.toThrow('requires browser or webview')
+  })
+
   it('owns the Bun HTTP server lifecycle', async () => {
     const app = createDesktopApp({
       id: `runtime-server-${process.pid}`,
@@ -201,6 +281,40 @@ describe('desktop runtime', () => {
       await server.stop(true)
     }
   }, 30_000)
+
+  it.skipIf(process.platform === 'win32')('falls back to Firefox with an isolated tracked profile', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'bundesk-firefox-test-'))
+    temporaryDirectories.push(directory)
+    const executable = join(directory, 'firefox')
+    const argsFile = join(directory, 'args.txt')
+    const profile = join(directory, 'profile')
+    await writeFile(executable, [
+      '#!/usr/bin/env bun',
+      `await Bun.write(${JSON.stringify(argsFile)}, Bun.argv.slice(2).join('\\n'))`,
+    ].join('\n'))
+    await chmod(executable, 0o755)
+
+    expect(await findFirefoxBrowser({ candidates: [join(directory, 'missing'), executable] })).toBe(executable)
+    const window = await launchAppWindow({
+      appId: `runtime-firefox-${process.pid}`,
+      url: 'http://127.0.0.1:43210/example',
+      preferred: 'firefox',
+      firefoxCandidates: [executable],
+      userDataDir: profile,
+      browserArgs: ['--test-argument'],
+      inheritOutput: false,
+    })
+    expect(window).not.toBeNull()
+    await window?.exited
+    expect((await readFile(argsFile, 'utf8')).split('\n')).toEqual([
+      '--new-instance',
+      '--profile',
+      profile,
+      '--new-window',
+      'http://127.0.0.1:43210/example',
+      '--test-argument',
+    ])
+  })
 
   it('routes framework integration commands without starting the application server', async () => {
     const app = createDesktopApp({
@@ -607,6 +721,26 @@ describe('dbus codec', () => {
 
 describe('linux tray (StatusNotifierItem)', () => {
   const hasSessionBus = Boolean(process.env.DBUS_SESSION_BUS_ADDRESS || process.env.XDG_RUNTIME_DIR)
+  it.skipIf(!hasSessionBus)('cancels an in-flight registration when destroyed immediately', async () => {
+    const child = Bun.spawn([process.execPath, join(import.meta.dir, 'fixtures/tray-fast-stop.ts')], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: process.env,
+    })
+    const outcome = await Promise.race([
+      child.exited.then((exitCode) => ({ timedOut: false, exitCode })),
+      Bun.sleep(5_000).then(() => ({ timedOut: true, exitCode: null })),
+    ])
+    if (outcome.timedOut) {
+      child.kill()
+      await child.exited
+    }
+    const stderr = await new Response(child.stderr).text()
+    expect(outcome.timedOut).toBe(false)
+    expect(outcome.exitCode).toBe(0)
+    expect(stderr).toBe('')
+  }, 10_000)
+
   it.skipIf(!hasSessionBus)('registers, updates and destroys on a live session bus', async () => {
     const { createLinuxTray } = await import('../src/runtime/tray-linux')
     const tray = createLinuxTray<unknown>(

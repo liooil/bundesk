@@ -19,10 +19,16 @@ const VERSION = typeof __EXAMPLE_APP_VERSION__ === 'string' ? __EXAMPLE_APP_VERS
 // route notifications through a mutable holder instead.
 let notify: (options: DesktopNotificationOptions) => Promise<boolean> = () => Promise.resolve(false)
 let appContextEnv: 'development' | 'production' | undefined
+let appContextProvider: 'browser' | 'webview' | 'webkit' | undefined
 
 const app = createDesktopApp({
   id: APP_ID,
   version: VERSION,
+  cli: {
+    name: 'example-app',
+    description: 'BunDesk full-stack desktop application showcase',
+    options: [{ flags: '--smoke', description: 'Run the headless CI smoke check and exit' }],
+  },
   server: {
     port: 0,
     routes: {
@@ -32,7 +38,7 @@ const app = createDesktopApp({
         version: VERSION,
         env: appContextEnv ?? 'development',
         platform: process.platform,
-        provider: providerName(),
+        provider: appContextProvider ?? providerName(),
       }),
     },
   },
@@ -79,6 +85,7 @@ const app = createDesktopApp({
   onReady: async (context) => {
     notify = context.notify
     appContextEnv = context.env
+    appContextProvider = context.windowProvider ?? providerName()
     console.log(`[example-app] ${VERSION} ready: ${context.url.href} env=${context.env}`)
   },
 })

@@ -2,9 +2,9 @@
 
 > [中文](README.zh-CN.md) · **English**
 
-**Turn local web apps into desktop applications that start fast, build fast and are easy to debug — with Bun and the system Chromium.**
+**Turn local web apps into desktop applications that start fast, build fast and are easy to debug — with Bun and the system browser.**
 
-BunDesk is a desktop application framework for Bun — not just an EXE packaging script. The name is **Bun + Desktop**. The framework handles the HTTP server, Edge/Chrome App Mode windows, single instance, automatic updates, Windows file associations and Start Menu integration as one unit, while keeping the low-level composable API available.
+BunDesk is a desktop application framework for Bun — not just an EXE packaging script. The name is **Bun + Desktop**. The framework handles the HTTP server, browser windows, single instance, automatic updates, Windows file associations and Start Menu integration as one unit, while keeping the low-level composable API available.
 
 ## Why BunDesk
 
@@ -24,7 +24,7 @@ Real-project benchmarks record the number of release files, the total size after
 In development the app is an ordinary Bun HTTP server and an ordinary web page:
 
 - server code runs directly under Bun, so existing TypeScript debugging techniques work;
-- the UI is debugged with Edge/Chrome DevTools, no custom WebView debugging bridge;
+- the UI is debugged with the browser's DevTools, no custom debugging bridge;
 - `--no-browser` starts only the server, so you can debug with any browser or API client;
 - app routes, Bun plugins, and Vite/Tailwind and Worker build logic all stay in the app repository.
 
@@ -36,14 +36,14 @@ Windows x64/ARM64 single-file EXEs can be produced on Linux CI. BunDesk download
 
 ### No bundled Chromium
 
-At runtime the app uses the Microsoft Edge, Google Chrome or Chromium already installed on the system, opened as a standalone app window via `--app=<url>`. The cost is that the target machine must have a compatible browser; the payoff is smaller releases, less renderer update burden and a shorter packaging pipeline.
+At runtime BunDesk prefers an installed Microsoft Edge, Google Chrome or Chromium and opens it as a standalone app window via `--app=<url>`. If none is installed, it launches Firefox with an isolated, tracked profile; the system URL opener is the final fallback. Every selection or failure is logged. The payoff is smaller releases, less renderer update burden and a shorter packaging pipeline.
 
 ## Positioning vs Electron / Tauri
 
 | | BunDesk | Electron | Tauri |
 | --- | --- | --- | --- |
 | App backend | Bun | Node.js | Rust + optional sidecar |
-| Renderer | System Edge/Chrome/Chromium | Bundled Chromium | System WebView |
+| Renderer | System Chromium/Firefox or native WebView | Bundled Chromium | System WebView |
 | Main release-build path | Bun bundle + compile | JS bundle + Electron packaging | Frontend build + Rust/native compile |
 | Windows single-file EXE from Linux | Yes | Depends on target packaging config | Usually needs an extra cross toolchain |
 | Debugging | Bun + browser DevTools | Electron DevTools | WebView DevTools + Rust debugging |
@@ -155,7 +155,12 @@ await app.run()
 The framework reserves the following app commands:
 
 ```text
-my-app                         start the server and an App Mode window
+my-app                         start the server and a browser window
+my-app --help                  print help generated from the config and actions, then exit
+my-app --version               print the application name and version, then exit
+my-app --browser               force the system browser provider
+my-app --webview               force the platform-native in-process WebView
+my-app --provider browser      explicitly select browser (or webview)
 my-app <file>                  start, or forward the file argument to the primary instance
 my-app serve --no-browser      start only the HTTP server
 my-app register [--default]    register per-user file associations and a launcher
@@ -166,6 +171,8 @@ my-app uninstall-service       remove the service registration
 my-app service-status          show service status
 my-app upgrade [--force]       check for, install and restart after an upgrade
 ```
+
+`-h` is equivalent to `--help`, and `-V` to `--version`. Use `cli.name`, `cli.description`, and `cli.options` to customize the displayed name, description, and application-specific options; framework commands and actions are listed automatically.
 
 `register` only writes `HKCU` and requires no administrator privileges. `--default` writes the per-user default ProgID for the extension, but does not bypass Windows' `UserChoice` protection.
 
@@ -208,6 +215,7 @@ import {
   acquireSingleInstance,
   createUpdater,
   findChromiumBrowser,
+  findFirefoxBrowser,
   launchAppWindow,
   registerWindowsIntegration,
   staticBinaryProvider,
@@ -539,17 +547,25 @@ const app = createDesktopApp({
 - Pages served by the app must set a real `content-type` (`text/html`); without
   it the page renders as plain text.
 
-Window providers by platform (`provider: 'browser'` is the default everywhere
-and launches the system browser in App Mode):
+Window providers by platform (`provider: 'browser'` is the default everywhere;
+it prefers Chromium App Mode and falls back to an isolated Firefox window):
+
+The CLI can override the config with `--browser` / `--webview` (or
+`--provider browser|webview`). CLI `webview` is a cross-platform abstraction:
+it maps to `webview` on Windows and `webkit` on Linux; unsupported platforms
+fail with a clear error. `--no-browser` still means no window at all. The
+`window.provider` config property uses the literal provider names in the table.
 
 | Platform | In-process provider | Status | Mechanism |
 | --- | --- | --- | --- |
 | Windows | `webview` (WebView2) | **Implemented** | C shim compiled by embedded TinyCC; direct call into the runtime's `EmbeddedBrowserWebView.dll` (no loader binary) |
-| Linux | `webkit` (WebKitGTK) | **Implemented** | `webkit2gtk-4.1` C API shim compiled by embedded TinyCC (`run_javascript` → `executeScript`, `script-message-received` → `onMessage`); GTK3 and GTK4 webkit builds both supported (base detected at runtime); requires the WebKitGTK stack installed (e.g. `pacman -S webkit2gtk-4.1` / `apt install libwebkit2gtk-4.1-0`), falls back to `browser` otherwise; in WSLg set `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1` (plus `LIBGL_ALWAYS_SOFTWARE=1` if the GPU init fails) |
+| Linux | `webkit` (WebKitGTK) | **Implemented** | `webkit2gtk-4.1` C API shim compiled by embedded TinyCC (`run_javascript` → `executeScript`, `script-message-received` → `onMessage`); GTK3 and GTK4 webkit builds both supported (base detected at runtime); requires the WebKitGTK stack installed (e.g. `pacman -S webkit2gtk-4.1` / `apt install libwebkit2gtk-4.1-0`); DMA-BUF rendering is disabled by default on Wayland for GBM compatibility (set `WEBKIT_DISABLE_DMABUF_RENDERER=0` before launch to override); in WSLg set `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1` (plus `LIBGL_ALWAYS_SOFTWARE=1` if the GPU init fails) |
 | macOS | `wkwebview` (WKWebView) | Not implemented | `objc_msgSend` FFI shim; feasible but the most fragile (ObjC blocks, NSApplication run loop) |
 | Termux | — | Not supported | Android has no shell-process WebView API; embedded WebView needs an APK. VIEW intent (`browser`) is the intended path |
 
-`window.provider = 'webview'` throws on non-Windows platforms.
+In config, `window.provider = 'webview'` throws on non-Windows platforms;
+Linux config uses `webkit`, while its CLI spelling remains the portable
+`--webview`.
 
 ## Automatic updates
 
@@ -649,14 +665,14 @@ A custom mirror can be used via `runtime.downloadUrl`, and `runtime.sha256` pins
 | Feature | Windows | Linux | macOS | Termux (Android) |
 | --- | --- | --- | --- | --- |
 | HTTP server / lifecycle | Yes | Yes | Yes | Yes |
-| App Mode / WebView2 window | Yes / Yes | Yes / - | Yes / - (incl. Brave) | VIEW intent |
+| Browser / in-process WebView window | Yes / Yes | Yes / Yes (WebKitGTK) | Yes / No | VIEW intent / No |
 | Secure single instance and argument forwarding | Yes | Yes | Yes | Yes |
 | Single-file build / `.app` bundle | single-file EXE | single file | `.app` bundle | n/a |
 | Cross-compilation | any platform → EXE | any platform → single file | Linux/macOS → `.app` | n/a |
 | Atomic replacement of the current executable | Yes | low-level API available; no desktop release commitment in 0.1 | low-level API available; no desktop release commitment in 0.1 | low-level API available |
 | File associations / launcher | Yes (HKCU) | Yes (XDG) | build-time Info.plist | No |
 | Service registration (headless serve) | HKCU Run key | systemd user | launchd agent | termux-boot |
-| System tray | Yes (Win32 FFI) | Planned (SNI D-Bus) | Planned (AppKit FFI) | No |
+| System tray | Yes (Win32 FFI) | Yes (SNI D-Bus) | Planned (AppKit FFI) | No |
 | System notifications | WinRT toast (PowerShell bridge) | notify-send | osascript | termux-notification |
 
 The Windows console modes (`detached`/`hidden`/`inherit`) only apply on Windows; the `windows`/`runtime` build options require a `bun-windows-*` target, and the `macos` option requires a `bun-darwin-*` target with an `outfile` ending in `.app`.

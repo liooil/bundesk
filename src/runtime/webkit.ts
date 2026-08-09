@@ -50,7 +50,8 @@ export interface WebKitWindow {
 }
 
 interface ShimSymbols {
-  set_handlers(msg: number, nav: number, exec: number, execRaw: number): void
+  set_handlers(msg: number, nav: number, exec: number, execRaw: number, close: number): void
+  wk_configure_environment(): number
   wk_init(): number
   wk_diag(): number
   wk_create_window(title: number, url: number, width: number, height: number): number
@@ -74,7 +75,8 @@ async function loadShim(): Promise<ShimSymbols> {
       const library = cc({
         source: sourcePath,
         symbols: {
-          set_handlers: { returns: 'void', args: ['ptr', 'ptr', 'ptr', 'ptr'] },
+          set_handlers: { returns: 'void', args: ['ptr', 'ptr', 'ptr', 'ptr', 'ptr'] },
+          wk_configure_environment: { returns: 'i32', args: [] },
           wk_init: { returns: 'i32', args: [] },
           wk_diag: { returns: 'i32', args: [] },
           wk_create_window: { returns: 'i32', args: ['ptr', 'ptr', 'i32', 'i32'] },
@@ -110,6 +112,12 @@ export async function createWebKitWindow(options: WebKitWindowOptions): Promise<
     throw new Error('WebKitGTK windows are only available on Linux')
   }
   const shim = await loadShim()
+  // WebKitGTK's DMA-BUF renderer can fail to allocate a GBM buffer on some
+  // Wayland/GPU combinations. This calls libc setenv before WebKit starts so
+  // its child processes inherit the setting. A caller-supplied value wins.
+  if (shim.wk_configure_environment()) {
+    console.info('[BunDesk] WebKitGTK: disabled DMA-BUF rendering for Wayland compatibility')
+  }
   const width = options.width ?? 900
   const height = options.height ?? 640
 
@@ -145,8 +153,31 @@ export async function createWebKitWindow(options: WebKitWindowOptions): Promise<
   // Results of fire-and-forget evaluations (app->page postMessage dispatch).
   const execRawCallback = new JSCallback(() => {}, { args: ['ptr'], returns: 'void' })
 
-  const closeCallback = new JSCallback(() => {
+  let closed = false
+  let exitCode: number | null = null
+  let resolveExited: (() => void) | undefined
+  const exited = new Promise<void>((resolve) => {
+    resolveExited = resolve
+  })
+  let closeCallback: JSCallback
+  const closeWindow = () => {
+    if (closed) return
+    closed = true
+    exitCode = 0
+    resolveExited?.()
+    shim.wk_close()
+    stopPump()
+    messageCallback.close()
+    navCallback.close()
+    execCallback.close()
+    execRawCallback.close()
+    closeCallback.close()
+  }
+  closeCallback = new JSCallback(() => {
     options.onClose?.()
+    // Let the GTK signal callback return before destroying the native window
+    // and releasing its callback pointer.
+    setTimeout(closeWindow, 0)
   }, { args: [], returns: 'void' })
 
   shim.set_handlers(
@@ -154,6 +185,7 @@ export async function createWebKitWindow(options: WebKitWindowOptions): Promise<
     navCallback.ptr as unknown as number,
     execCallback.ptr as unknown as number,
     execRawCallback.ptr as unknown as number,
+    closeCallback.ptr as unknown as number,
   )
 
   if (!shim.wk_init()) {
@@ -172,25 +204,6 @@ export async function createWebKitWindow(options: WebKitWindowOptions): Promise<
     throw new Error('Failed to create the WebKitGTK window')
   }
 
-  let closed = false
-  let exitCode: number | null = null
-  let resolveExited: (() => void) | undefined
-  const exited = new Promise<void>((resolve) => {
-    resolveExited = resolve
-  })
-  const closeWindow = () => {
-    if (closed) return
-    closed = true
-    exitCode = 0
-    resolveExited?.()
-    shim.wk_close()
-    stopPump()
-    messageCallback.close()
-    navCallback.close()
-    execCallback.close()
-    execRawCallback.close()
-    closeCallback.close()
-  }
   return {
     exitCode,
     exited,

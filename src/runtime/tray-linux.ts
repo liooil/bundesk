@@ -42,6 +42,8 @@ export function createLinuxTray<WebSocketData = undefined>(
   let controller: TrayController<WebSocketData> | null = null
   let pendingMenu: TrayMenuItem<WebSocketData>[] = options.menu ?? []
   let pendingTooltip = options.tooltip ?? ''
+  let destroyed = false
+  let startingConnection: DBusConnection | null = null
 
   // The controller is returned synchronously; the D-Bus connection is
   // established in the background and the item registers when ready.
@@ -50,7 +52,17 @@ export function createLinuxTray<WebSocketData = undefined>(
     initialTooltip: pendingTooltip,
     onActivate: callbacks.onActivate,
     onMenuClick: callbacks.onMenuClick,
+    isCancelled: () => destroyed,
+    onConnection: (connection) => {
+      startingConnection = connection
+      if (destroyed) connection.close()
+    },
   }).then((created) => {
+    startingConnection = null
+    if (destroyed) {
+      created?.destroy()
+      return
+    }
     controller = created
     if (created) {
       if (pendingMenu !== created.options.menu) created.update({ menu: pendingMenu as TrayMenuItem<unknown>[] })
@@ -65,6 +77,9 @@ export function createLinuxTray<WebSocketData = undefined>(
       controller?.update(next as Partial<DesktopTrayOptions<unknown>>)
     },
     destroy() {
+      destroyed = true
+      startingConnection?.close()
+      startingConnection = null
       controller?.destroy()
       controller = null
     },
@@ -83,6 +98,8 @@ async function startLinuxTray(
     initialTooltip: string
     onActivate: () => void
     onMenuClick: (item: TrayMenuItem<unknown>) => void
+    isCancelled: () => boolean
+    onConnection: (connection: DBusConnection) => void
   },
 ): Promise<CreatedTray | null> {
   const { sessionBusAddress } = await import('./dbus')
@@ -219,13 +236,23 @@ async function startLinuxTray(
 
   try {
     connection = await connectDBus(address, handleMethodCall)
+    args.onConnection(connection)
+    if (args.isCancelled()) {
+      connection.close()
+      return null
+    }
   } catch (error) {
+    if (args.isCancelled()) return null
     console.warn(`[BunDesk] Linux tray unavailable (${error instanceof Error ? error.message : String(error)})`)
     return null
   }
 
   try {
     await connection.call(DBUS_IFACE, DBUS_PATH, DBUS_IFACE, 'RequestName', 'su', [itemName, 0])
+    if (args.isCancelled()) {
+      connection.close()
+      return null
+    }
     // Tell the watcher (when present) about the item; hosts also discover the
     // well-known name via NameOwnerChanged. The watcher may be absent, in
     // which case the call errors — that's fine, discovery falls back to name
@@ -233,7 +260,15 @@ async function startLinuxTray(
     // watcher name makes some daemons drop the connection.
     await connection.call(SNI_WATCHER, SNI_WATCHER_PATH, SNI_IFACE, 'RegisterStatusNotifierItem', 's', [itemName])
       .catch(() => {})
+    if (args.isCancelled()) {
+      connection.close()
+      return null
+    }
   } catch (error) {
+    if (args.isCancelled()) {
+      connection.close()
+      return null
+    }
     console.warn(`[BunDesk] Linux tray registration failed (${error instanceof Error ? error.message : String(error)})`)
     connection.close()
     return null

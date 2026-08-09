@@ -49,6 +49,8 @@ typedef void (*jscb)(void*);
 /* ---- dlopen/dlsym (merged into libc on modern glibc; resolved at runtime) ---- */
 extern void* dlopen(const char*, int);
 extern void* dlsym(void*, const char*);
+extern char* getenv(const char*);
+extern int setenv(const char*, const char*, int);
 
 #define RTLD_NOW 2
 #define RTLD_NOLOAD 4
@@ -203,17 +205,29 @@ int wk_init(void) {
 
 int wk_diag(void) { return g_diag; }
 
+/* Bun's JS process.env mutation is not inherited by native child processes.
+   Set the compatibility flag through libc before WebKit is initialized so
+   WebKitWebProcess receives it. Return 1 only when the default was applied. */
+int wk_configure_environment(void) {
+  if (getenv("WAYLAND_DISPLAY") && !getenv("WEBKIT_DISABLE_DMABUF_RENDERER")) {
+    return setenv("WEBKIT_DISABLE_DMABUF_RENDERER", "1", 0) == 0;
+  }
+  return 0;
+}
+
 /* ---- JS callbacks (set once from JS) ---- */
 static jscb cb_msg;
 static jscb cb_nav;
 static jscb cb_exec;
 static jscb cb_exec_raw;
+static void (*cb_close)(void);
 
-void set_handlers(void* msg, void* nav, void* exec, void* exec_raw) {
+void set_handlers(void* msg, void* nav, void* exec, void* exec_raw, void* close) {
   cb_msg = (jscb)msg;
   cb_nav = (jscb)nav;
   cb_exec = (jscb)exec;
   cb_exec_raw = (jscb)exec_raw;
+  cb_close = (void (*)(void))close;
 }
 
 static char g_resbuf[262144];
@@ -231,6 +245,22 @@ static void copy_utf8(char* s) {
 static void* g_win;
 static void* g_webview;
 static void* g_manager;
+
+/* Prevent GTK's default destroy; JS owns teardown and resolves window.exited. */
+static int close_gtk3_cb(void* win, void* event, void* ud) {
+  (void)win;
+  (void)event;
+  (void)ud;
+  if (cb_close) cb_close();
+  return 1;
+}
+
+static int close_gtk4_cb(void* win, void* ud) {
+  (void)win;
+  (void)ud;
+  if (cb_close) cb_close();
+  return 1;
+}
 
 /* load-changed: GCallback(void* webview, int event, void* ud) */
 static void load_cb(void* wv, int event, void* ud) {
@@ -275,7 +305,9 @@ static void exec_cb(void* src, void* res, void* ud) {
       copy_utf8(s);
       g_free_fn(s);
     }
-    if (!g_use_evaluate) g_object_unref_fn(value); /* JSCValue is a GObject in 4.1 */
+    /* evaluate_javascript_finish returns an owned JSCValue; the legacy
+       run_javascript result exposes a borrowed value owned by jr. */
+    if (g_use_evaluate) g_object_unref_fn(value);
   } else if (errp) {
     /* GError { guint domain; gint code; gchar* message; } — message at +8 */
     char* m = *(char**)((char*)errp + 8);
@@ -321,12 +353,18 @@ int wk_create_window(const char* title, const char* url, int w, int h) {
   if (!g_webview) return 0;
   if (g_gtk_mode == 4) {
     gtk_window_set_child_fn(g_win, g_webview);
+    g_signal_connect_data_fn(g_win, "close-request", (void*)close_gtk4_cb, 0, 0, 0);
   } else {
     gtk_container_add_fn(g_win, g_webview);
+    g_signal_connect_data_fn(g_win, "delete-event", (void*)close_gtk3_cb, 0, 0, 0);
   }
 
   g_signal_connect_data_fn(g_webview, "load-changed", (void*)load_cb, 0, 0, 0);
 
+  /* GTK3's gtk_widget_show() does not recursively show child widgets. The
+     web view can load and execute while remaining invisible unless it is
+     explicitly shown. GTK4 accepts the same call. */
+  gtk_widget_show_fn(g_webview);
   gtk_widget_show_fn(g_win);
   gtk_window_present_fn(g_win);
   webkit_web_view_load_uri_fn(g_webview, url);

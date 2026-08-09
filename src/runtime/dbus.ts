@@ -483,7 +483,10 @@ export function connectDBus(address: string, methodHandler: (message: DBusMessag
         if (!resolved) reject(error)
       },
       close() {
-        pending.forEach((call) => call.reject(new Error('dbus connection closed')))
+        pending.forEach((call) => {
+          clearTimeout(call.timer)
+          call.reject(new Error('dbus connection closed'))
+        })
         pending.clear()
       },
     }
