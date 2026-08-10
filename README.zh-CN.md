@@ -286,6 +286,20 @@ onReady: (context) => {
 
 非 `development`/`production` 的值永远不会被框架消费：命令行 `--mode=staging` 仍是应用的参数，`NODE_ENV=staging` 也仍可被应用读取——框架只认这两个标准值。
 
+### 粘性随机端口
+
+动态端口默认具有粘性。当 `server.port` 未设置或设为 `0` 时，首次启动由操作系统随机选择空闲端口，并记录到 `<appData>/server-port.json`；后续启动优先复用该端口，使本地 URL 跨重启保持稳定。若端口已被占用，BunDesk 会自动回退到新的随机端口并更新记录。
+
+显式的非零 `server.port` 或非零命令行 `--port` 始终优先，且不会读写粘性端口记录。设置 `stickyPort: false` 可保留随机分配但禁用复用；便携模式或测试也可覆盖记录目录：
+
+```ts
+server: {
+  port: 0,
+  stickyPort: { dataDirectory: './portable-data' }, // 默认 true
+  fetch: () => new Response('Hello'),
+}
+```
+
 ## 全栈页面（HTML imports）
 
 Bun 的打包器可以直接从 HTML 文件提供完整前端管线：import 一个 `.html` 文件并作为路由传入——Bun 会自动打包其中所有 `<script>` 与 `<link>` 标签（TypeScript/TSX/JSX/CSS），把标记重写为哈希资源 URL 并提供。

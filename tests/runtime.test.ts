@@ -83,7 +83,7 @@ describe('desktop runtime', () => {
     for (const [index, args] of [['--browser'], ['--provider', 'browser'], ['--provider=browser']].entries()) {
       const app = createDesktopApp({
         id: `runtime-browser-cli-${process.pid}-${index}`,
-        server: { port: 0, fetch: () => new Response('ok') },
+        server: { port: 0, stickyPort: false, fetch: () => new Response('ok') },
         window: {
           provider: 'webview',
           preferred: process.execPath,
@@ -116,6 +116,7 @@ describe('desktop runtime', () => {
       id: `runtime-server-${process.pid}`,
       server: {
         port: 0,
+        stickyPort: false,
         fetch: () => new Response('runtime-ok'),
       },
       window: false,
@@ -129,6 +130,73 @@ describe('desktop runtime', () => {
     expect(result.server.pendingRequests).toBe(0)
   })
 
+  it('reuses the last dynamic port and falls back when it is unavailable', async () => {
+    const dataDirectory = await mkdtemp(join(tmpdir(), 'bundesk-sticky-port-'))
+    temporaryDirectories.push(dataDirectory)
+    const appId = `runtime-sticky-port-${process.pid}`
+    const createApp = () => createDesktopApp({
+      id: appId,
+      server: {
+        stickyPort: { dataDirectory },
+        fetch: () => new Response('sticky-ok'),
+      },
+      window: false,
+      singleInstance: false,
+    })
+    const sessions: DesktopAppSession[] = []
+    let blocker: Bun.Server<undefined> | undefined
+
+    try {
+      const first = await createApp().start([])
+      expect(first.kind).toBe('primary')
+      if (first.kind !== 'primary') throw new Error('Expected a primary session')
+      sessions.push(first)
+      const firstPort = Number(first.url.port)
+      expect(firstPort).toBeGreaterThan(0)
+      expect(JSON.parse(await readFile(join(dataDirectory, 'server-port.json'), 'utf8'))).toEqual({ port: firstPort })
+      await first.stop()
+
+      const reused = await createApp().start([])
+      expect(reused.kind).toBe('primary')
+      if (reused.kind !== 'primary') throw new Error('Expected a primary session')
+      sessions.push(reused)
+      expect(Number(reused.url.port)).toBe(firstPort)
+      await reused.stop()
+
+      blocker = Bun.serve({ hostname: '127.0.0.1', port: firstPort, fetch: () => new Response('occupied') })
+      const fallback = await createApp().start([])
+      expect(fallback.kind).toBe('primary')
+      if (fallback.kind !== 'primary') throw new Error('Expected a primary session')
+      sessions.push(fallback)
+      const fallbackPort = Number(fallback.url.port)
+      expect(fallbackPort).toBeGreaterThan(0)
+      expect(fallbackPort).not.toBe(firstPort)
+      expect(JSON.parse(await readFile(join(dataDirectory, 'server-port.json'), 'utf8'))).toEqual({ port: fallbackPort })
+      await fallback.stop()
+      await blocker.stop(true)
+      blocker = undefined
+
+      const fixed = await createDesktopApp({
+        id: appId,
+        server: {
+          port: firstPort,
+          stickyPort: { dataDirectory },
+          fetch: () => new Response('fixed-ok'),
+        },
+        window: false,
+        singleInstance: false,
+      }).start([])
+      expect(fixed.kind).toBe('primary')
+      if (fixed.kind !== 'primary') throw new Error('Expected a primary session')
+      sessions.push(fixed)
+      expect(Number(fixed.url.port)).toBe(firstPort)
+      expect(JSON.parse(await readFile(join(dataDirectory, 'server-port.json'), 'utf8'))).toEqual({ port: fallbackPort })
+    } finally {
+      await Promise.all(sessions.map((session) => session.stop()))
+      await blocker?.stop(true)
+    }
+  })
+
   it('forwards argv and cwd to the primary instance callback', async () => {
     const dataDirectory = await mkdtemp(join(tmpdir(), 'bundesk-instance-test-'))
     temporaryDirectories.push(dataDirectory)
@@ -138,7 +206,7 @@ describe('desktop runtime', () => {
     })
     const primaryApp = createDesktopApp({
       id: `runtime-instance-${process.pid}`,
-      server: { port: 0, fetch: () => new Response('ok') },
+      server: { port: 0, stickyPort: false, fetch: () => new Response('ok') },
       window: false,
       singleInstance: { dataDirectory },
       onSecondInstance(event) {
@@ -156,7 +224,7 @@ describe('desktop runtime', () => {
 
     const secondaryApp = createDesktopApp({
       id: `runtime-instance-${process.pid}`,
-      server: { port: 0, fetch: () => new Response('unused') },
+      server: { port: 0, stickyPort: false, fetch: () => new Response('unused') },
       window: false,
       singleInstance: { dataDirectory },
     })
@@ -356,7 +424,7 @@ describe('desktop runtime', () => {
 function actionTestApp(overrides: Partial<DesktopAppOptions> = {}) {
   return createDesktopApp({
     id: `runtime-actions-${process.pid}`,
-    server: { port: 0, routes: { '/': new Response('ok') } },
+    server: { port: 0, stickyPort: false, routes: { '/': new Response('ok') } },
     window: false,
     singleInstance: false,
     actions: [{
@@ -421,7 +489,7 @@ describe('actions: one functionality, cli + api + gui', () => {
     temporaryDirectories.push(dataDirectory)
     const options: DesktopAppOptions = {
       id: `runtime-actions-forward-${process.pid}`,
-      server: { port: 0, fetch: () => new Response('unused') },
+      server: { port: 0, stickyPort: false, fetch: () => new Response('unused') },
       window: false,
       singleInstance: { dataDirectory },
       actions: [{
@@ -533,7 +601,7 @@ describe('system notifications', () => {
   it.skipIf(process.platform !== 'win32')('delivers a toast through context.notify', async () => {
     const app = createDesktopApp({
       id: `runtime-notify-${process.pid}`,
-      server: { port: 0, fetch: () => new Response('ok') },
+      server: { port: 0, stickyPort: false, fetch: () => new Response('ok') },
       window: false,
       singleInstance: false,
       notifications: true,
@@ -565,6 +633,7 @@ describe('webview2 window provider', () => {
       id: `runtime-webview-${process.pid}`,
       server: {
         port: 0,
+        stickyPort: false,
         fetch: () => new Response('<html><body><h1>webview-test</h1></body></html>', {
           headers: { 'content-type': 'text/html; charset=utf-8' },
         }),

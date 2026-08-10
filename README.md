@@ -304,6 +304,27 @@ Values other than `development`/`production` are never consumed: a CLI
 `--mode=staging` stays an app argument and a `NODE_ENV=staging` stays readable
 by the app — the framework only recognizes the two standard values.
 
+### Sticky dynamic ports
+
+Dynamic ports are sticky by default. When `server.port` is omitted or set to
+`0`, the first launch asks the OS for a random free port and stores it in
+`<appData>/server-port.json`. Later launches try that port first, preserving a
+stable local URL across restarts; if it is occupied, BunDesk falls back to a
+new random port and updates the record.
+
+An explicit non-zero `server.port` or non-zero CLI `--port` always wins and is
+neither read from nor written to the sticky record. Disable reuse while keeping
+random allocation with `stickyPort: false`, or override the record directory for
+portable/test setups:
+
+```ts
+server: {
+  port: 0,
+  stickyPort: { dataDirectory: './portable-data' }, // true by default
+  fetch: () => new Response('Hello'),
+}
+```
+
 ## Fullstack pages (HTML imports)
 
 Bun's bundler can serve a full frontend pipeline directly from HTML files:

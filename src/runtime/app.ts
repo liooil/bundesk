@@ -8,6 +8,7 @@ import type { WebViewWindow } from './webview2'
 import { join } from 'node:path'
 import { launchAppWindow } from './browser'
 import { getAppDataDirectory } from './paths'
+import { readStickyPort, writeStickyPort, type StickyPortOptions } from './sticky-port'
 import { createWebViewWindow } from './webview2'
 import { createWebKitWindow } from './webkit'
 import { acquireSingleInstance } from './single-instance'
@@ -73,12 +74,22 @@ export interface DesktopCliOptions {
   /** Application-specific options to append to the generated help. */
   options?: DesktopCliHelpOption[]
 }
+export type DesktopServerOptions<WebSocketData = undefined, Routes extends string = string> =
+  Bun.Serve.Options<WebSocketData, Routes> & {
+    /**
+     * Reuse the last successfully selected dynamic port. Enabled by default.
+     * Set false to choose a fresh random port on every launch, or provide a
+     * dataDirectory to override where server-port.json is stored.
+     */
+    stickyPort?: StickyPortOptions
+  }
+
 
 export interface DesktopAppOptions<WebSocketData = undefined, Routes extends string = string> {
   id: string
   version?: string
   cli?: DesktopCliOptions
-  server: Bun.Serve.Options<WebSocketData, Routes>
+  server: DesktopServerOptions<WebSocketData, Routes>
   window?: DesktopWindowOptions | false
   singleInstance?: false | {
     dataDirectory?: string
@@ -267,14 +278,33 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       }
     }
 
+    const { stickyPort, ...configuredServerOptions } = this.options.server
+    const configuredPort = parsed.port ?? ('port' in configuredServerOptions ? configuredServerOptions.port : undefined)
+    const usesDynamicPort = configuredPort === undefined || configuredPort === 0
+    const stickyPortState = usesDynamicPort
+      ? await readStickyPort(this.options.id, stickyPort)
+      : { enabled: false, preferredPort: 0, recordPath: null }
     const serverOptions = withActionRoutes({
-      ...this.options.server,
+      ...configuredServerOptions,
       // Mode fills the default only; an explicit user setting always wins.
       development: this.options.server.development ?? env === 'development',
-      hostname: parsed.host ?? ('hostname' in this.options.server ? this.options.server.hostname : undefined),
-      port: parsed.port ?? ('port' in this.options.server ? this.options.server.port : undefined),
+      hostname: parsed.host ?? ('hostname' in configuredServerOptions ? configuredServerOptions.hostname : undefined),
+      port: usesDynamicPort ? stickyPortState.preferredPort : configuredPort,
     } as Bun.Serve.Options<WebSocketData, Routes>, registry)
-    const server = Bun.serve(serverOptions)
+    let server: Bun.Server<WebSocketData>
+    try {
+      server = Bun.serve(serverOptions)
+    } catch (error) {
+      if (!usesDynamicPort || stickyPortState.preferredPort === 0) throw error
+      console.warn(`[BunDesk] Port ${stickyPortState.preferredPort} is unavailable; selecting a new random port.`)
+      serverOptions.port = 0
+      server = Bun.serve(serverOptions)
+    }
+    if (usesDynamicPort) {
+      await writeStickyPort(stickyPortState, server.port).catch((error) => {
+        console.warn(`[BunDesk] Could not persist sticky port: ${error instanceof Error ? error.message : String(error)}`)
+      })
+    }
     const protocol = 'tls' in serverOptions && serverOptions.tls ? 'https' : 'http'
     const configuredHost = 'hostname' in serverOptions ? serverOptions.hostname : undefined
     const urlHost = !configuredHost || configuredHost === '0.0.0.0'
