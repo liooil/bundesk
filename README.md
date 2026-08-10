@@ -351,6 +351,68 @@ const app = createDesktopApp({
 No custom frontend build script is needed — the page assets are part of the
 app's build graph (a `bundesk` compile emits the same assets ahead of time).
 
+### Tailwind CSS v4
+
+BunDesk does not bundle or wrap Tailwind. Use Bun's official static-route
+plugin so the same source CSS participates in Bun's HTML pipeline during both
+development and compilation.
+
+Install the application-owned dependencies:
+
+```bash
+bun add -d tailwindcss bun-plugin-tailwind
+```
+
+Load the plugin before `Bun.serve()` bundles HTML routes by adding a project
+`bunfig.toml`:
+
+```toml
+[serve.static]
+plugins = ["bun-plugin-tailwind"]
+```
+
+Reference the source CSS directly from the HTML page:
+
+```css
+/* src/page/app.css */
+@import "tailwindcss";
+@source "../components/";
+```
+
+```html
+<link rel="stylesheet" href="./app.css" />
+```
+
+For compiled applications, pass the same plugin through the standard Bun
+build configuration already exposed by `defineConfig`:
+
+```ts
+import tailwind from 'bun-plugin-tailwind'
+import { defineConfig } from 'bundesk'
+
+export default defineConfig({
+  entrypoint: 'src/main.ts',
+  outfile: 'dist/my-app.exe',
+  plugins: [tailwind],
+})
+```
+
+Development can then run the app directly (`bun src/main.ts`): Bun rebuilds
+Tailwind CSS with the HTML route and HMR updates the open page. No generated
+CSS file or separate `tailwindcss --watch` process is required.
+
+The static plugin must be loaded through `[serve.static]`; dynamically calling
+`Bun.plugin(tailwind)` is not equivalent because the runtime plugin builder
+does not expose the native `onBeforeParse` hook required by the Tailwind
+plugin. Also verify the generated CSS before removing an existing Tailwind CLI
+pipeline: plugin releases can embed a different Tailwind compiler version. In
+our Bun 1.3.14 check, `bun-plugin-tailwind@0.1.2` emitted a Tailwind 4.1.14
+banner even with `tailwindcss@4.3.3` installed. Keep the CLI watcher when exact
+compiler-version parity is required.
+
+See [Bun's Tailwind plugin documentation](https://bun.sh/docs/bundler/fullstack#tailwindcss-plugin)
+and [`bun-plugin-tailwind`](https://www.npmjs.com/package/bun-plugin-tailwind).
+
 ### dev vs prod behavior
 
 The pipeline is switched by the runtime environment (see above): the

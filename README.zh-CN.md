@@ -322,6 +322,54 @@ const app = createDesktopApp({
 
 无需自定义前端打包脚本——页面资源属于应用的构建图（`bundesk` 编译时以 AOT 方式产出同一批资源）。
 
+### Tailwind CSS v4
+
+BunDesk 不内置或封装 Tailwind 编译器，而是使用 Bun 官方的静态路由插件，让同一份源 CSS 在开发和编译时都进入 Bun 的 HTML 管线。
+
+在应用中安装依赖：
+
+```bash
+bun add -d tailwindcss bun-plugin-tailwind
+```
+
+增加项目级 `bunfig.toml`，确保插件在 `Bun.serve()` 打包 HTML route 前加载：
+
+```toml
+[serve.static]
+plugins = ["bun-plugin-tailwind"]
+```
+
+HTML 直接引用源 CSS：
+
+```css
+/* src/page/app.css */
+@import "tailwindcss";
+@source "../components/";
+```
+
+```html
+<link rel="stylesheet" href="./app.css" />
+```
+
+编译应用时，通过 `defineConfig` 已暴露的标准 Bun build 配置传入同一个插件：
+
+```ts
+import tailwind from 'bun-plugin-tailwind'
+import { defineConfig } from 'bundesk'
+
+export default defineConfig({
+  entrypoint: 'src/main.ts',
+  outfile: 'dist/my-app.exe',
+  plugins: [tailwind],
+})
+```
+
+开发脚本随后可直接运行应用（`bun src/main.ts`）：Bun 会随 HTML route 重新生成 Tailwind CSS，并通过 HMR 更新已打开的页面，不再需要提交生成后的 CSS，也不需要单独运行 `tailwindcss --watch`。
+
+静态插件必须通过 `[serve.static]` 加载；动态调用 `Bun.plugin(tailwind)` 并不等价，因为 runtime plugin builder 没有 Tailwind 插件需要的原生 `onBeforeParse` hook。删除已有 Tailwind CLI 管线前还应对比生成结果：插件发行版可能内嵌不同版本的 Tailwind 编译器。实测 Bun 1.3.14 下，即使安装了 `tailwindcss@4.3.3`，`bun-plugin-tailwind@0.1.2` 仍生成带 Tailwind 4.1.14 banner 的 CSS；若必须与指定编译器版本完全一致，应继续使用 CLI watcher。
+
+参见 [Bun Tailwind 插件文档](https://bun.sh/docs/bundler/fullstack#tailwindcss-plugin)和 [`bun-plugin-tailwind`](https://www.npmjs.com/package/bun-plugin-tailwind)。
+
 ### dev 与 prod 行为
 
 该管线由运行环境切换（见上节）：框架的 `development` 默认值正是 Bun 全栈服务器使用的开关。
