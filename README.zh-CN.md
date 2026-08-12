@@ -395,6 +395,20 @@ bun server/main.ts          # 窗口打开，HMR 生效
 
 在 `server` 选项中加 `development: { console: true }`，可把页面 console.log 经 HMR 连接回显到终端。
 
+### 服务端 `bun --hot`
+
+使用 `bun --hot` 启动应用，可在不重启 Bun 进程的情况下软重载后端模块：
+
+```bash
+bun --hot src/main.ts
+```
+
+`app.run()` 会自动识别 hot 模式：启动完成后立即返回，避免入口模块求值永久 pending；下一轮模块求值开始时，BunDesk 会先停止旧应用 session（server、窗口、托盘和单实例锁），再在同一进程、同一显式或粘性端口上启动替代 session。
+
+它与 Bun 的浏览器 HMR 互补：`server.development` 更新 HTML/TSX/CSS 客户端，`bun --hot` 重新求值后端代码和生命周期配置。若希望每次修改都获得完全隔离的进程重启，仍可使用 `bun --watch`。
+
+入口继续写 `await app.run()` 即可。不要再套一层永不结束的 Promise 或 interval；入口模块必须完成求值，Bun 才能应用下一次软重载。hot 模式仅用于开发，编译二进制仍保持正常的阻塞生命周期。
+
 ## 平台集成
 
 ### Linux：XDG 文件关联与 launcher

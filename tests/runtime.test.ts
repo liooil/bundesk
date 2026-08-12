@@ -763,6 +763,82 @@ describe('app environment resolution', () => {
   })
 })
 
+describe('bun --hot runtime', () => {
+  it('replaces the active BunDesk session without blocking module evaluation', async () => {
+    const directory = await mkdtemp(join(import.meta.dir, '.tmp-hot-runtime-'))
+    temporaryDirectories.push(directory)
+    const entrypoint = join(directory, 'hot-runtime.ts')
+    const valuePath = join(directory, 'hot-runtime-value.ts')
+    const eventsPath = join(directory, 'events.log')
+    const frameworkPath = join(import.meta.dir, '../src/index.ts').replaceAll('\\', '/')
+    await writeFile(entrypoint, [
+      "import { appendFile } from 'node:fs/promises'",
+      `import { createDesktopApp } from ${JSON.stringify(frameworkPath)}`,
+      "import { value } from './hot-runtime-value'",
+      "declare global { var bundeskHotFixtureEvaluation: number | undefined }",
+      'globalThis.bundeskHotFixtureEvaluation = (globalThis.bundeskHotFixtureEvaluation ?? 0) + 1',
+      'const evaluation = globalThis.bundeskHotFixtureEvaluation',
+      `const eventsPath = ${JSON.stringify(eventsPath.replaceAll('\\', '/'))}`,
+      "await appendFile(eventsPath, `evaluate:${evaluation}:${value}\\n`)",
+      'const app = createDesktopApp({',
+      "  id: 'dev.bundesk.hot-runtime-test',",
+      `  server: { hostname: '127.0.0.1', port: Number(process.env.BUNDESK_HOT_TEST_PORT), stickyPort: false, fetch: () => new Response(\`${'${evaluation}:${value}'}\`) },`,
+      '  window: false,',
+      '  singleInstance: false,',
+      "  onReady: async () => { await appendFile(eventsPath, `ready:${evaluation}:${value}\\n`) },",
+      '})',
+      'await app.run()',
+      "await appendFile(eventsPath, `returned:${evaluation}:${value}\\n`)",
+    ].join('\n'))
+    await writeFile(valuePath, "export const value = 'one'\n")
+    await writeFile(eventsPath, '')
+
+    const reserved = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response('reserved') })
+    const port = reserved.port
+    await reserved.stop(true)
+    if (!port) throw new Error('Expected a dynamic test port')
+
+    const child = Bun.spawn([process.execPath, '--hot', entrypoint], {
+      cwd: import.meta.dir,
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: {
+        ...process.env,
+        BUNDESK_HOT_TEST_PORT: String(port),
+      },
+    })
+
+    try {
+      await waitForCondition(async () => {
+        const events = await readFile(eventsPath, 'utf8').catch(() => '')
+        return events.includes('returned:1:one')
+      }, 10_000)
+      expect(await fetch(`http://127.0.0.1:${port}`).then((response) => response.text())).toBe('1:one')
+
+      await writeFile(valuePath, "export const value = 'two'\n")
+      await waitForCondition(async () => {
+        const events = await readFile(eventsPath, 'utf8').catch(() => '')
+        return events.includes(':two') && events.match(/returned:\d+:two/g)?.length
+      }, 10_000)
+      const updated = await fetch(`http://127.0.0.1:${port}`).then((response) => response.text())
+      expect(updated).toMatch(/^\d+:two$/)
+      expect(await readFile(eventsPath, 'utf8')).toContain('ready:')
+    } finally {
+      child.kill()
+      await child.exited
+    }
+  }, 20_000)
+})
+
+async function waitForCondition(check: () => boolean | number | Promise<boolean | number | undefined>, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await check()) return
+    await Bun.sleep(50)
+  }
+  throw new Error(`Condition was not met within ${timeoutMs}ms`)
+}
+
 describe('dbus codec', () => {
   const roundTrip = (signature: string, values: unknown[]): unknown[] => {
     const { encodeBody, decodeBody } = require('../src/runtime/dbus') as typeof import('../src/runtime/dbus')

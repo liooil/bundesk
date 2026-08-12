@@ -9,6 +9,7 @@ import { join } from 'node:path'
 import { launchAppWindow } from './browser'
 import { getAppDataDirectory } from './paths'
 import { readStickyPort, writeStickyPort, type StickyPortOptions } from './sticky-port'
+import { isBunHotMode, replaceHotRun } from './hot-reload'
 import { createWebViewWindow } from './webview2'
 import { createWebKitWindow } from './webkit'
 import { acquireSingleInstance } from './single-instance'
@@ -463,8 +464,11 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
   }
 
   async run(args: string[] = Bun.argv.slice(2)): Promise<DesktopAppStartResult<WebSocketData>> {
-    const result = await this.start(args)
-    if (result.kind === 'primary') await result.wait()
+    const hotMode = isBunHotMode()
+    const result = hotMode
+      ? await replaceHotRun(this.options.id, () => this.start(args))
+      : await this.start(args)
+    if (result.kind === 'primary' && !hotMode) await result.wait()
     if (result.kind === 'command' || result.kind === 'action') {
       console.log(
         result.kind === 'command' && (result.command === 'help' || result.command === 'version')

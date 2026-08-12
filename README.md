@@ -439,9 +439,33 @@ frontend edits hot-reload into the open window — no app restart:
 bun server/main.ts          # window opens, HMR active
 # edit src/dashboard.html / its scripts -> the window updates in place
 ```
-
 Add `development: { console: true }` to the `server` option to echo the
 page's console.log to the terminal over the HMR connection.
+
+### Server-side `bun --hot`
+
+Run the application with `bun --hot` to soft-reload backend modules without
+restarting the Bun process:
+
+```bash
+bun --hot src/main.ts
+```
+
+`app.run()` detects hot mode automatically. It returns after startup instead
+of keeping the entry module evaluation pending; on the next evaluation,
+BunDesk stops the previous app session (server, window, tray and
+single-instance lock) before starting its replacement in the same process and
+on the same configured or sticky port.
+
+This is complementary to Bun's browser HMR: `server.development` updates the
+HTML/TSX/CSS client, while `bun --hot` re-evaluates backend code and lifecycle
+configuration. `bun --watch` remains the isolated alternative when a full
+process restart is preferable.
+
+Use `await app.run()` unchanged. Do not wrap it in an additional never-ending
+promise or interval: the entry module must finish evaluating for Bun to apply
+the next soft reload. Hot mode is intended for development; compiled binaries
+keep the normal blocking lifecycle.
 
 ## Platform integration
 
