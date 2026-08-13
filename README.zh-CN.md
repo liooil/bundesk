@@ -74,7 +74,7 @@ BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要
 ## 安装
 
 ```bash
-bun add -d github:liooil/bundesk
+bun add -d bundesk
 ```
 
 包名 `bundesk` 可直接用于 Bun：

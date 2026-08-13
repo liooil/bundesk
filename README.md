@@ -74,7 +74,7 @@ BunDesk suits tool-style desktop apps built around a local HTTP service plus a W
 ## Installation
 
 ```bash
-bun add -d github:liooil/bundesk
+bun add -d bundesk
 ```
 
 The package name `bundesk` is used directly with Bun:

@@ -1,15 +1,20 @@
 {
   "name": "bundesk",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Fast Bun framework for building, running, integrating, and updating local web apps as desktop applications.",
   "type": "module",
   "bin": {
-    "bundesk": "./src/cli.ts"
+    "bundesk": "bin/bundesk.js"
   },
   "exports": {
     ".": "./src/index.ts"
   },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
   "files": [
+    "bin",
     "src",
     "docs",
     "README.md",
@@ -19,7 +24,8 @@
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "pack:check": "bun pm pack --dry-run"
+    "pack:check": "bun pm pack --dry-run",
+    "release:check": "bun run typecheck && bun test && bun run pack:check"
   },
   "repository": {
     "type": "git",
@@ -40,6 +46,7 @@
   "engines": {
     "bun": ">=1.3.14"
   },
+  "packageManager": "bun@1.3.14",
   "dependencies": {
     "@xmldom/xmldom": "^0.8.12",
     "@zip.js/zip.js": "^2.8.26",

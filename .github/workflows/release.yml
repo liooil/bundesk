@@ -20,6 +20,10 @@ jobs:
         with:
           bun-version: 1.3.14
       - run: bun install --frozen-lockfile
+      - name: Verify tag matches package version
+        run: |
+          package_version=$(bun -p "require('./package.json').version")
+          test "$GITHUB_REF_NAME" = "v$package_version"
       - run: bun run typecheck
       - run: bun test
       - run: mkdir artifacts
@@ -75,10 +79,42 @@ jobs:
             !example-app/dist/*.sha256
           if-no-files-found: error
 
-  # Single release asset upload so the release is created exactly once, after
-  # every build has succeeded.
-  release:
+  # Publish the exact tarball that was tested above. The first publication
+  # uses a short-lived npm granular token because trusted publishing can only
+  # be configured after the package exists. Later releases use npm OIDC.
+  npm:
     needs: [package, example-build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      PACKAGE_VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-bundesk
+          path: artifacts
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Publish framework package
+        shell: bash
+        run: |
+          version=${PACKAGE_VERSION#v}
+          if npm view "bundesk@$version" version >/dev/null 2>&1; then
+            echo "bundesk@$version is already published; skipping bootstrap release"
+          else
+            npm publish artifacts/bundesk.tgz --provenance
+          fi
+
+  # Single release asset upload so the release is created exactly once, after
+  # every build and the npm publication have succeeded.
+  release:
+    needs: [package, example-build, npm]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
