@@ -79,9 +79,8 @@ jobs:
             !example-app/dist/*.sha256
           if-no-files-found: error
 
-  # Publish the exact tarball that was tested above. The first publication
-  # uses a short-lived npm granular token because trusted publishing can only
-  # be configured after the package exists. Later releases use npm OIDC.
+  # Publish the exact tarball that was tested above. npm trusted publishing
+  # authenticates this GitHub-hosted job through OIDC; no npm token is stored.
   npm:
     needs: [package, example-build]
     runs-on: ubuntu-latest
@@ -89,7 +88,6 @@ jobs:
       contents: read
       id-token: write
     env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       PACKAGE_VERSION: ${{ github.ref_name }}
     steps:
       - uses: actions/download-artifact@v4
@@ -106,7 +104,7 @@ jobs:
         run: |
           version=${PACKAGE_VERSION#v}
           if npm view "bundesk@$version" version >/dev/null 2>&1; then
-            echo "bundesk@$version is already published; skipping bootstrap release"
+            echo "bundesk@$version is already published; skipping"
           else
             npm publish artifacts/bundesk.tgz --provenance
           fi
