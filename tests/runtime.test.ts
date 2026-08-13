@@ -765,7 +765,9 @@ describe('app environment resolution', () => {
 
 describe('bun --hot runtime', () => {
   it('replaces the active BunDesk session without blocking module evaluation', async () => {
-    const directory = await mkdtemp(join(import.meta.dir, '.tmp-hot-runtime-'))
+    // Bun's Linux watcher ignores hidden directories, so keep the fixture
+    // inside the project tree without a dot-prefixed path.
+    const directory = await mkdtemp(join(import.meta.dir, 'tmp-hot-runtime-'))
     temporaryDirectories.push(directory)
     const entrypoint = join(directory, 'hot-runtime.ts')
     const valuePath = join(directory, 'hot-runtime-value.ts')
@@ -824,7 +826,7 @@ describe('bun --hot runtime', () => {
       expect(updated).toMatch(/^\d+:two$/)
       expect(await readFile(eventsPath, 'utf8')).toContain('ready:')
     } finally {
-      child.kill()
+      child.kill(9)
       await child.exited
     }
   }, 20_000)
