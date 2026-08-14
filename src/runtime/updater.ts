@@ -1,6 +1,12 @@
 import { MD5 } from 'bun'
 import { open, rename, rm } from 'node:fs/promises'
 import { basename } from 'node:path'
+import {
+  reconstructStructuralUpdate,
+  StructuralRangeUnsupportedError,
+  type StructuralReconstructionProgress,
+} from '../structural-update'
+
 
 export interface CurrentExecutable {
   path: string
@@ -9,6 +15,11 @@ export interface CurrentExecutable {
   sha256: string
   etags: string[]
 }
+export interface StructuralUpdateDescriptor {
+  /** Fall back to downloading the complete target when layout reuse, digest verification, or Range requests fail. Defaults to true. */
+  fallbackToFull?: boolean
+}
+
 
 export interface UpdateDescriptor {
   version?: string
@@ -17,6 +28,8 @@ export interface UpdateDescriptor {
   sha256?: string
   etag?: string
   changelog?: string
+  structural?: StructuralUpdateDescriptor
+  downloadHeaders?: Record<string, string>
 }
 
 export interface UpdateProvider {
@@ -28,15 +41,23 @@ export interface StaticBinaryProviderOptions {
   changelogUrl?: string
   version?: string
   headers?: Record<string, string>
+  /** Reuse matching runtime sections without publishing an update index. */
+  structuralUpdates?: boolean
+  structuralFallbackToFull?: boolean
 }
+
+export type PlatformAssetName = string | Partial<Record<
+  'windows-x64' | 'windows-arm64' | 'linux-x64' | 'linux-arm64' | 'darwin-x64' | 'darwin-arm64',
+  string
+>>
 
 export interface GitHubReleaseProviderOptions {
   owner: string
   repository: string
-  assetName: string | Partial<Record<
-    'windows-x64' | 'windows-arm64' | 'linux-x64' | 'linux-arm64' | 'darwin-x64' | 'darwin-arm64',
-    string
-  >>
+  assetName: PlatformAssetName
+  /** Reuse matching runtime sections without publishing an update index. */
+  structuralUpdates?: boolean
+  structuralFallbackToFull?: boolean
   token?: string
   apiUrl?: string
   includePrerelease?: boolean
@@ -52,8 +73,11 @@ export interface UpdaterOptions {
 }
 
 export interface UpdateProgress {
+  phase?: 'planning' | 'inspecting-current' | 'reconstructing' | 'downloading' | 'verifying' | 'installing'
   downloaded: number
   total?: number
+  reused?: number
+  targetTotal?: number
 }
 
 export interface InstalledUpdate {
@@ -117,6 +141,10 @@ export function staticBinaryProvider(options: StaticBinaryProviderOptions): Upda
         sha256: sha256?.replace(/^sha256:/i, '').toLowerCase(),
         etag,
         changelog,
+        structural: options.structuralUpdates
+          ? { fallbackToFull: options.structuralFallbackToFull }
+          : undefined,
+        downloadHeaders: options.headers,
       }
     },
   }
@@ -150,12 +178,19 @@ export function githubReleaseProvider(options: GitHubReleaseProviderOptions): Up
       const assetName = resolveGitHubAssetName(options.assetName)
       const asset = release.assets.find((candidate) => candidate.name === assetName)
       if (!asset) throw new Error(`GitHub release ${release.tag_name} does not contain asset ${assetName}`)
+      const structural = options.structuralUpdates
+        ? { fallbackToFull: options.structuralFallbackToFull }
+        : undefined
       return {
         version: remoteVersion,
         url: asset.browser_download_url,
         size: asset.size,
         sha256: asset.digest?.replace(/^sha256:/i, '').toLowerCase(),
         changelog: release.body ?? release.name ?? undefined,
+        structural,
+        downloadHeaders: options.token
+          ? { authorization: `Bearer ${options.token}`, 'user-agent': 'BunDesk' }
+          : undefined,
       }
     },
   }
@@ -247,36 +282,48 @@ export async function installUpdate(
   await rm(tempPath, { force: true })
 
   try {
-    const response = await fetch(descriptor.url, { signal: options.signal })
-    if (!response.ok || !response.body) {
-      throw new Error(`Update download failed (${response.status} ${response.statusText}): ${descriptor.url}`)
-    }
-    const totalHeader = Number.parseInt(response.headers.get('content-length') ?? '', 10)
-    const total = descriptor.size ?? (Number.isFinite(totalHeader) && totalHeader > 0 ? totalHeader : undefined)
-    const output = await open(tempPath, 'w', 0o700)
-    let downloaded = 0
-    try {
-      const reader = response.body.getReader()
-      while (true) {
-        if (options.signal?.aborted) throw options.signal.reason ?? new Error('Update cancelled')
-        const { done, value } = await reader.read()
-        if (done) break
-        if (!value) continue
-        await output.write(value)
-        downloaded += value.byteLength
-        options.onProgress?.({ downloaded, total })
+    if (descriptor.structural) {
+      options.onProgress?.({ phase: 'planning', downloaded: 0, total: 0 })
+      try {
+        if (!descriptor.sha256) {
+          throw new Error('Structural updates require the full target SHA-256 in trusted release metadata')
+        }
+        await reconstructStructuralUpdate({
+          currentPath: targetPath,
+          outputPath: tempPath,
+          targetUrl: descriptor.url,
+          targetSize: descriptor.size,
+          targetSha256: descriptor.sha256,
+          headers: descriptor.downloadHeaders,
+          ifRange: formatIfRange(descriptor.etag),
+          signal: options.signal,
+          onProgress: (progress) => options.onProgress?.(structuralProgress(progress)),
+        })
+      } catch (error) {
+        if (descriptor.structural.fallbackToFull === false) throw error
+        if (!(error instanceof StructuralRangeUnsupportedError)) {
+          console.warn(`[BunDesk] Structural update unavailable; downloading the complete target: ${error instanceof Error ? error.message : String(error)}`)
+        }
+        await rm(tempPath, { force: true })
+        await downloadFullUpdate(descriptor, tempPath, options)
       }
-    } finally {
-      await output.close()
+    } else {
+      await downloadFullUpdate(descriptor, tempPath, options)
     }
 
-    if (downloaded <= 0) throw new Error('Downloaded update is empty')
-    if (descriptor.size !== undefined && downloaded !== descriptor.size) {
-      throw new Error(`Update size mismatch: expected ${descriptor.size}, received ${downloaded}`)
-    }
+    options.onProgress?.({
+      phase: 'verifying',
+      downloaded: 0,
+      total: descriptor.size,
+      targetTotal: descriptor.size,
+    })
     const downloadedInfo = await inspectExecutable(tempPath, descriptor.version)
-    if (descriptor.sha256 && downloadedInfo.sha256 !== descriptor.sha256.replace(/^sha256:/i, '').toLowerCase()) {
-      throw new Error(`Update SHA-256 mismatch: expected ${descriptor.sha256}, received ${downloadedInfo.sha256}`)
+    if (descriptor.size !== undefined && downloadedInfo.size !== descriptor.size) {
+      throw new Error(`Update size mismatch: expected ${descriptor.size}, received ${downloadedInfo.size}`)
+    }
+    const expectedSha = descriptor.sha256?.replace(/^sha256:/i, '').toLowerCase()
+    if (expectedSha && downloadedInfo.sha256 !== expectedSha) {
+      throw new Error(`Update SHA-256 mismatch: expected ${expectedSha}, received ${downloadedInfo.sha256}`)
     }
     if (descriptor.etag && !downloadedInfo.etags.includes(normalizeEtag(descriptor.etag) ?? '')) {
       throw new Error(`Update ETag mismatch: expected ${descriptor.etag}`)
@@ -286,6 +333,12 @@ export async function installUpdate(
       if (header[0] !== 0x4d || header[1] !== 0x5a) throw new Error('Downloaded update is not a Windows executable')
     }
 
+    options.onProgress?.({
+      phase: 'installing',
+      downloaded: 0,
+      total: downloadedInfo.size,
+      targetTotal: downloadedInfo.size,
+    })
     await rm(backupPath, { force: true })
     await rename(targetPath, backupPath)
     try {
@@ -299,6 +352,64 @@ export async function installUpdate(
     await rm(tempPath, { force: true })
     throw error
   }
+}
+
+
+async function downloadFullUpdate(
+  descriptor: UpdateDescriptor,
+  tempPath: string,
+  options: {
+    signal?: AbortSignal
+    onProgress?: (progress: UpdateProgress) => void
+  },
+): Promise<void> {
+  const response = await fetch(descriptor.url, {
+    headers: descriptor.downloadHeaders,
+    signal: options.signal,
+  })
+  if (!response.ok || !response.body) {
+    throw new Error(`Update download failed (${response.status} ${response.statusText}): ${descriptor.url}`)
+  }
+  const totalHeader = Number.parseInt(response.headers.get('content-length') ?? '', 10)
+  const total = descriptor.size ?? (Number.isFinite(totalHeader) && totalHeader > 0 ? totalHeader : undefined)
+  const output = await open(tempPath, 'w', 0o700)
+  let downloaded = 0
+  try {
+    const reader = response.body.getReader()
+    while (true) {
+      if (options.signal?.aborted) throw options.signal.reason ?? new Error('Update cancelled')
+      const { done, value } = await reader.read()
+      if (done) break
+      if (!value) continue
+      let written = 0
+      while (written < value.byteLength) {
+        const result = await output.write(value, written, value.byteLength - written)
+        if (result.bytesWritten <= 0) throw new Error(`Failed to write update at ${downloaded + written}`)
+        written += result.bytesWritten
+      }
+      downloaded += value.byteLength
+      options.onProgress?.({ phase: 'downloading', downloaded, total, targetTotal: descriptor.size })
+    }
+    await output.sync()
+  } finally {
+    await output.close()
+  }
+  if (downloaded <= 0) throw new Error('Downloaded update is empty')
+}
+
+function structuralProgress(progress: StructuralReconstructionProgress): UpdateProgress {
+  return {
+    phase: progress.phase,
+    downloaded: progress.downloaded,
+    total: progress.downloadTotal,
+    reused: progress.reused,
+    targetTotal: progress.targetTotal,
+  }
+}
+
+function formatIfRange(etag: string | undefined): string | undefined {
+  const normalized = normalizeEtag(etag)
+  return normalized ? `\"${normalized}\"` : undefined
 }
 
 export async function cleanupAfterUpdate(options: {
@@ -317,15 +428,17 @@ export async function cleanupAfterUpdate(options: {
   ])
 }
 
-function resolveGitHubAssetName(
-  configured: GitHubReleaseProviderOptions['assetName'],
-): string {
+function resolvePlatformAssetName(configured: PlatformAssetName): string {
   if (typeof configured === 'string') return configured
   const platform = process.platform === 'win32' ? 'windows' : process.platform
   const key = `${platform}-${process.arch}` as keyof typeof configured
   const value = configured[key]
   if (!value) throw new Error(`No GitHub release asset configured for ${key}`)
   return value
+}
+
+function resolveGitHubAssetName(configured: GitHubReleaseProviderOptions['assetName']): string {
+  return resolvePlatformAssetName(configured)
 }
 
 function normalizeEtag(value: string | null | undefined): string | undefined {

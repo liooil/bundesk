@@ -688,6 +688,7 @@ const provider = staticBinaryProvider({
   binaryUrl: 'https://downloads.example/my-app.exe',
   changelogUrl: 'https://downloads.example/CHANGELOG.txt',
   version: '1.2.4',
+  structuralUpdates: true,
 })
 ```
 
@@ -701,11 +702,42 @@ import { githubReleaseProvider } from 'bundesk'
 const provider = githubReleaseProvider({
   owner: 'OWNER',
   repository: 'REPOSITORY',
+  structuralUpdates: true,
   assetName: 'my-app.exe',
 })
 ```
 
 provider 比较当前版本与 release tag，选择指定 asset，并使用 GitHub asset digest（存在时）校验下载。
+
+### 无索引 section 级 Range 更新
+
+在更新 provider 设置 `structuralUpdates: true`。发布 executable 不做任何
+修改：BunDesk 不生成内嵌索引、JSON sidecar 或针对旧版本的 delta。正常
+构建并签名的同一个 executable 同时用于直接下载和增量更新。
+
+更新时，BunDesk 通过 HTTP Range 解析远程 PE/ELF/Mach-O header 和 section
+table。目标 runtime section 的 container identity、section name/index 和
+size 与当前 executable 一致时，客户端乐观地从本地复制。Header、signature、
+平台资源、空隙和完整 `.bun` section 始终下载。BunDesk 不保存 module
+contents hash；任意内嵌 JS、CSS、HTML 或 shim 变化都会下载完整 `.bun`
+section。大型可变资源应使用应用层更新，不应依赖 Bun compiled graph。
+
+Layout 相同只作为复用提示，不作为可信证明。可信 release metadata 必须
+提供最终 artifact SHA-256。BunDesk 重建临时 executable，只有完整 size
+和 SHA-256 都匹配才安装。若 Bun runtime 已变化、但某个 section 恰好仍
+同名同 size，乐观重建会在摘要校验时失败，默认 `fallbackToFull` 随后下载
+完整 artifact。不支持精确 `206 Partial Content`、稳定 `Content-Range`、
+`Accept-Encoding: identity` 或不可变 ETag 的 server 也会进入完整回退。
+
+这种设计让普通 app-only release 在零发布 metadata、零 executable 修改
+的前提下复用体积很大的 Bun runtime。runtime 变化的 release 可能先发生
+一次局部尝试，再完整下载；只有明确不接受这一权衡时才设置
+`fallbackToFull: false`。
+
+macOS 下该模式描述 Mach-O executable。完整 `.app` 更新仍需处理
+`Info.plist`、resources 和 bundle signature；不能把 executable updater
+直接指向 `.app` 的 ZIP 归档。
+
 
 ## 单实例安全模型
 

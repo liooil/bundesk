@@ -430,10 +430,12 @@ describe('desktop runtime', () => {
         provider: staticBinaryProvider({
           binaryUrl: `http://127.0.0.1:${server.port}/sample-app.bin`,
           version: '1.1.0',
+          structuralUpdates: true,
         }),
       })
       const checked = await updater.check()
       expect(checked.update?.version).toBe('1.1.0')
+      expect(checked.update?.structural).toEqual({})
       if (!checked.update) throw new Error('Expected an update')
       const installed = await updater.install(checked.update)
       expect(await Bun.file(targetPath).text()).toBe('new-binary-content')
@@ -467,6 +469,7 @@ describe('desktop runtime', () => {
         owner: 'owner',
         repository: 'repository',
         assetName: 'sample.exe',
+        structuralUpdates: true,
         apiUrl: `http://127.0.0.1:${server.port}`,
       })
       const update = await provider.check({
@@ -482,6 +485,7 @@ describe('desktop runtime', () => {
         size: 123,
         sha256: 'a'.repeat(64),
         changelog: 'Changes',
+        structural: {},
       })
     } finally {
       await server.stop(true)

@@ -766,6 +766,7 @@ const provider = staticBinaryProvider({
   binaryUrl: 'https://downloads.example/my-app.exe',
   changelogUrl: 'https://downloads.example/CHANGELOG.txt',
   version: '1.2.4',
+  structuralUpdates: true,
 })
 ```
 
@@ -779,11 +780,47 @@ import { githubReleaseProvider } from 'bundesk'
 const provider = githubReleaseProvider({
   owner: 'OWNER',
   repository: 'REPOSITORY',
+  structuralUpdates: true,
   assetName: 'my-app.exe',
 })
 ```
 
 The provider compares the current version against the release tag, selects the specified asset, and verifies the download with the GitHub asset digest (when present).
+
+### Index-free section-level Range updates
+
+Set `structuralUpdates: true` on the update provider. The release executable
+is not modified: BunDesk publishes no embedded index, JSON sidecar, or
+old-version-specific delta. The same normally built and signed executable is
+both the download and the update source.
+
+At update time, BunDesk uses HTTP Range requests to parse the remote
+PE/ELF/Mach-O headers and section table. A target runtime section is copied
+optimistically from the installed executable when its container identity,
+section name/index, and size match. Headers, signatures, platform resources,
+gaps, and the complete `.bun` section are always downloaded. BunDesk stores no
+per-module hashes; any bundled JS, CSS, HTML, or shim change therefore
+downloads the complete `.bun` section. Large mutable assets should use an
+application-level update mechanism instead of the compiled Bun graph.
+
+Layout equality is deliberately only a reuse hint, not a trust decision.
+Trusted release metadata must provide the final artifact SHA-256. BunDesk
+reconstructs a temporary executable, verifies its complete size and SHA-256,
+and installs it only when both match. If a Bun runtime changed without changing
+a section's name or size, the optimistic reconstruction fails the digest check
+and the default `fallbackToFull` path downloads the complete artifact. A server
+without exact `206 Partial Content`, stable `Content-Range`,
+`Accept-Encoding: identity`, or immutable ETag also takes that fallback.
+
+This design gives normal app-only releases the main benefit—reusing the large
+Bun runtime—with zero publishing metadata and zero executable mutation. A
+runtime-changing release can cost one partial attempt followed by a full
+download; set `fallbackToFull: false` only when that tradeoff is unacceptable.
+
+For macOS, this mode describes the Mach-O executable. A complete `.app`
+updater must still account for `Info.plist`, resources, and the bundle
+signature; do not point the executable updater at a ZIP of the app bundle.
+
 
 ## Single-instance security model
 

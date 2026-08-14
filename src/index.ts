@@ -41,6 +41,7 @@ export type DesktopCompileOptions = Omit<
   'target' | 'outfile' | 'windows' | 'executablePath'
 >
 
+
 export type DesktopAppConfig = Omit<
   Bun.BuildConfig,
   'entrypoints' | 'compile' | 'target' | 'outdir'
@@ -156,9 +157,6 @@ export async function buildDesktopApp(config: DesktopAppConfig): Promise<Desktop
     })
     if (!result.success) throw new DesktopBuildError(result.logs)
 
-    const output = Bun.file(compileOutfile)
-    if (!(await output.exists())) throw new Error(`Bun reported success but did not create ${compileOutfile}`)
-    const bytes = await output.arrayBuffer()
 
     let bundle: MacosAppBundleResult | undefined
     if (darwinLayout) {
@@ -170,6 +168,9 @@ export async function buildDesktopApp(config: DesktopAppConfig): Promise<Desktop
         version: macosOptions?.version ?? '1.0.0',
       })
     }
+
+    const finalExecutablePath = bundle?.executablePath ?? compileOutfile
+    const bytes = await Bun.file(finalExecutablePath).arrayBuffer()
     return {
       result,
       outfile,
@@ -389,6 +390,7 @@ function digest(bytes: ArrayBuffer): string {
   return hasher.digest('hex')
 }
 
+export * from './structural-update'
 export * from './runtime/app'
 export * from './runtime/environment'
 export * from './runtime/browser'
