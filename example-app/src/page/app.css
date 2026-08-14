@@ -31,7 +31,7 @@ h1 { margin: 0 0 16px; font-size: 20px; }
 .info dt { color: rgb(128 128 128); }
 .info dd { margin: 0; font-family: ui-monospace, monospace; }
 
-.actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.controls { display: flex; flex-wrap: wrap; gap: 10px; }
 button, .button {
   padding: 8px 14px;
   border: 0;

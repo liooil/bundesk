@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, it } from 'bun:test'
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -12,6 +12,7 @@ import {
   getLinuxIntegrationStatus,
   installService,
   launchAppWindow,
+  launchPwaWindow,
   registerLinuxIntegration,
   registerWindowsIntegration,
   resolveCliWindowProvider,
@@ -24,7 +25,7 @@ import {
   windowsToastScript,
   createLinuxTray,
 } from '../src/index'
-import type { DesktopAppOptions, DesktopAppSession, LinuxIntegrationOptions, SecondInstanceEvent } from '../src/index'
+import type { DesktopAppSession, LinuxIntegrationOptions, SecondInstanceEvent } from '../src/index'
 
 const temporaryDirectories: string[] = []
 
@@ -45,12 +46,6 @@ describe('desktop runtime', () => {
       server: { port: 0, fetch: () => new Response('must not start') },
       window: false,
       singleInstance: false,
-      actions: [{
-        name: 'greet',
-        description: 'Greet someone',
-        args: [{ name: 'name', type: 'string', required: true }],
-        handler: ({ name }) => ({ name }),
-      }],
     })
 
     const help = await app.start(['--help'])
@@ -58,9 +53,9 @@ describe('desktop runtime', () => {
     if (help.kind === 'command') {
       expect(help.command).toBe('help')
       expect(help.result).toContain('Usage: cli-test [command] [options]')
-      expect(help.result).toContain('greet --name <string>')
       expect(help.result).toContain('--smoke')
       expect(help.result).toContain('--provider <provider>')
+      expect(help.result).toContain('--pwa')
     }
 
     const shortHelp = await app.start(['-h'])
@@ -77,6 +72,9 @@ describe('desktop runtime', () => {
     expect(resolveCliWindowProvider('webview', 'win32')).toBe('webview')
     expect(resolveCliWindowProvider('webview', 'linux')).toBe('webkit')
     expect(() => resolveCliWindowProvider('webview', 'darwin')).toThrow('not available')
+    expect(resolveCliWindowProvider('pwa', 'win32')).toBe('pwa')
+    expect(resolveCliWindowProvider('pwa', 'linux')).toBe('pwa')
+    expect(resolveCliWindowProvider('pwa', 'darwin')).toBe('pwa')
 
     const profile = await mkdtemp(join(tmpdir(), 'bundesk-browser-cli-'))
     temporaryDirectories.push(profile)
@@ -101,14 +99,29 @@ describe('desktop runtime', () => {
       await session.stop()
     }
 
+    const pwa = createDesktopApp({
+      id: `runtime-pwa-cli-${process.pid}`,
+      server: { port: 0, stickyPort: false, fetch: () => new Response('unused') },
+      window: {
+        provider: 'browser',
+        preferred: process.execPath,
+        pwa: {
+          appId: 'abcdefghijklmnopabcdefghijklmnop',
+          userDataDir: profile,
+        },
+      },
+      singleInstance: false,
+    })
+    await expect(pwa.start(['--pwa'])).rejects.toThrow('is not installed in browser profile Default')
+
     const invalid = createDesktopApp({
       id: `runtime-browser-cli-invalid-${process.pid}`,
       server: { port: 0, fetch: () => new Response('must not start') },
       window: false,
       singleInstance: false,
     })
-    await expect(invalid.start(['--provider', 'native'])).rejects.toThrow('expected browser or webview')
-    await expect(invalid.start(['--provider'])).rejects.toThrow('requires browser or webview')
+    await expect(invalid.start(['--provider', 'native'])).rejects.toThrow('expected browser, pwa, or webview')
+    await expect(invalid.start(['--provider'])).rejects.toThrow('requires browser, pwa, or webview')
   })
 
   it('owns the Bun HTTP server lifecycle', async () => {
@@ -384,6 +397,61 @@ describe('desktop runtime', () => {
     ])
   })
 
+  it.skipIf(process.platform === 'win32')('launches an installed Chromium PWA from its browser profile', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'bundesk-pwa-test-'))
+    temporaryDirectories.push(directory)
+    const executable = join(directory, 'chromium')
+    const argsFile = join(directory, 'args.txt')
+    const userDataDir = join(directory, 'user-data')
+    const profileDirectory = 'Profile 2'
+    const appId = 'abcdefghijklmnopabcdefghijklmnop'
+    const manifestResources = join(
+      userDataDir,
+      profileDirectory,
+      'Web Applications',
+      'Manifest Resources',
+      appId,
+    )
+    await writeFile(executable, [
+      '#!/usr/bin/env bun',
+      `await Bun.write(${JSON.stringify(argsFile)}, Bun.argv.slice(2).join('\\n'))`,
+    ].join('\n'))
+    await chmod(executable, 0o755)
+    await mkdir(manifestResources, { recursive: true })
+    await Bun.write(join(manifestResources, 'installed'), '')
+
+    const window = await launchPwaWindow({
+      appId,
+      profileDirectory,
+      userDataDir,
+      preferred: executable,
+      browserArgs: ['--test-argument'],
+      inheritOutput: false,
+    })
+    await window.exited
+    expect((await readFile(argsFile, 'utf8')).split('\n')).toEqual([
+      `--app-id=${appId}`,
+      `--user-data-dir=${userDataDir}`,
+      `--profile-directory=${profileDirectory}`,
+      '--test-argument',
+    ])
+  })
+
+  it('rejects a missing or invalid PWA installation before launching Chromium', async () => {
+    await expect(launchPwaWindow({
+      appId: 'invalid',
+      preferred: process.execPath,
+    })).rejects.toThrow('32 lowercase characters')
+
+    const directory = await mkdtemp(join(tmpdir(), 'bundesk-pwa-missing-'))
+    temporaryDirectories.push(directory)
+    await expect(launchPwaWindow({
+      appId: 'abcdefghijklmnopabcdefghijklmnop',
+      userDataDir: directory,
+      preferred: process.execPath,
+    })).rejects.toThrow('is not installed in browser profile Default')
+  })
+
   it('routes framework integration commands without starting the application server', async () => {
     const app = createDesktopApp({
       id: `runtime-command-${process.pid}`,
@@ -421,117 +489,6 @@ describe('desktop runtime', () => {
   })
 })
 
-function actionTestApp(overrides: Partial<DesktopAppOptions> = {}) {
-  return createDesktopApp({
-    id: `runtime-actions-${process.pid}`,
-    server: { port: 0, stickyPort: false, routes: { '/': new Response('ok') } },
-    window: false,
-    singleInstance: false,
-    actions: [{
-      name: 'greet',
-      description: 'Greet someone',
-      args: [
-        { name: 'name', type: 'string', required: true },
-        { name: 'count', type: 'number', default: 1 },
-      ],
-      handler(args) {
-        return { greeting: `hello ${args.name}`, count: args.count }
-      },
-    }],
-    ...overrides,
-  })
-}
-
-describe('actions: one functionality, cli + api + gui', () => {
-  it('exposes actions over the HTTP API and the generated GUI console', async () => {
-    const app = actionTestApp()
-    const session = await app.start([])
-    expect(session.kind).toBe('primary')
-    if (session.kind !== 'primary') throw new Error('Expected a primary session')
-    try {
-      const list = await fetch(new URL('/api/actions', session.url)).then((response) => response.json()) as Array<{ name: string; args: unknown[] }>
-      expect(list).toHaveLength(1)
-      expect(list[0]?.name).toBe('greet')
-
-      const executed = await fetch(new URL('/api/actions/greet', session.url), {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ name: 'world', count: 2 }),
-      }).then((response) => response.json())
-      expect(executed).toEqual({ greeting: 'hello world', count: 2 })
-
-      const missing = await fetch(new URL('/api/actions/nope', session.url), { method: 'POST', body: '{}' })
-      expect(missing.status).toBe(404)
-
-      const invalid = await fetch(new URL('/api/actions/greet', session.url), { method: 'POST', body: '{}' })
-      expect(invalid.status).toBe(400)
-
-      const consolePage = await fetch(new URL('/__bundesk/actions', session.url))
-      expect(consolePage.status).toBe(200)
-      expect(await consolePage.text()).toContain('BunDesk Actions')
-    } finally {
-      await session.stop()
-    }
-  })
-
-  it('runs the same action from the CLI and exits', async () => {
-    const app = actionTestApp()
-    const result = await app.start(['greet', '--name', 'cli', '--count', '3'])
-    expect(result.kind).toBe('action')
-    if (result.kind === 'action') {
-      expect(result.action).toBe('greet')
-      expect(result.result).toEqual({ greeting: 'hello cli', count: 3 })
-    }
-  })
-
-  it('forwards a CLI action to the primary instance and returns the result', async () => {
-    const dataDirectory = await mkdtemp(join(tmpdir(), 'bundesk-action-forward-'))
-    temporaryDirectories.push(dataDirectory)
-    const options: DesktopAppOptions = {
-      id: `runtime-actions-forward-${process.pid}`,
-      server: { port: 0, stickyPort: false, fetch: () => new Response('unused') },
-      window: false,
-      singleInstance: { dataDirectory },
-      actions: [{
-        name: 'greet',
-        args: [{ name: 'name', type: 'string', required: true }],
-        handler(args) {
-          return { greeting: `hello ${args.name}` }
-        },
-      }],
-    }
-    const primaryApp = createDesktopApp(options)
-    const primary = await primaryApp.start([])
-    expect(primary.kind).toBe('primary')
-
-    const secondaryApp = createDesktopApp(options)
-    const secondary = await secondaryApp.start(['greet', '--name', 'forwarded'])
-    expect(secondary.kind).toBe('secondary')
-    if (secondary.kind === 'secondary') {
-      expect(secondary.accepted).toBe(true)
-      expect(secondary.result).toEqual({ greeting: 'hello forwarded' })
-    }
-    await (primary as DesktopAppSession).stop()
-  })
-
-  it('rejects unknown flags and missing required args from the CLI', async () => {
-    const app = actionTestApp()
-    await expect(app.start(['greet', '--bogus', 'x'])).rejects.toThrow('unknown flag')
-    await expect(app.start(['greet'])).rejects.toThrow('requires argument: name')
-  })
-
-  it('exposes actions on the app context', async () => {
-    const app = actionTestApp()
-    const session = await app.start([])
-    expect(session.kind).toBe('primary')
-    if (session.kind !== 'primary') throw new Error('Expected a primary session')
-    try {
-      expect(await session.actions.call('greet', { name: 'ctx' })).toEqual({ greeting: 'hello ctx', count: 1 })
-    } finally {
-      await session.stop()
-    }
-  })
-})
 
 describe('service registration', () => {
   it('renders a systemd user unit for the headless serve command', () => {

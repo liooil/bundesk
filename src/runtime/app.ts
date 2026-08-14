@@ -1,12 +1,11 @@
-import type { AppWindowOptions } from './browser'
+import type { AppWindowOptions, InstalledPwaOptions } from './browser'
 import type { SecondInstanceEvent, SingleInstanceResult } from './single-instance'
 import type { UpdateCheckResult, Updater, UpdaterOptions } from './updater'
 import type { WindowsIntegrationOptions, WindowsIntegrationResult, WindowsIntegrationStatus } from './windows-integration'
-import type { ActionRegistry, DesktopActionOptions } from './actions'
 import type { LinuxIntegrationOptions } from './linux-integration'
 import type { WebViewWindow } from './webview2'
 import { join } from 'node:path'
-import { launchAppWindow } from './browser'
+import { launchAppWindow, launchPwaWindow } from './browser'
 import { getAppDataDirectory } from './paths'
 import { readStickyPort, writeStickyPort, type StickyPortOptions } from './sticky-port'
 import { isBunHotMode, replaceHotRun } from './hot-reload'
@@ -14,13 +13,6 @@ import { createWebViewWindow } from './webview2'
 import { createWebKitWindow } from './webkit'
 import { acquireSingleInstance } from './single-instance'
 import { cleanupAfterUpdate, createUpdater } from './updater'
-import {
-  actionsApiPath,
-  actionsApiRoutes,
-  actionsConsolePath,
-  actionsConsoleResponse,
-  createActionRegistry,
-} from './actions'
 import {
   getLinuxIntegrationStatus,
   registerLinuxIntegration,
@@ -44,8 +36,10 @@ export type DesktopAppWindow = Bun.Subprocess | WebViewWindow
 export interface DesktopWindowOptions extends Omit<AppWindowOptions, 'appId' | 'url'> {
   path?: string
   exitWithWindow?: boolean
-  /** 'browser' (default) launches Chromium App Mode or an isolated Firefox window; 'webview' uses the in-process WebView2 window (Windows only); 'webkit' uses the in-process WebKitGTK window (Linux only). */
-  provider?: 'browser' | 'webview' | 'webkit'
+  /** Browser App Mode (default), an installed Chromium PWA, Windows WebView2, or Linux WebKitGTK. */
+  provider?: 'browser' | 'pwa' | 'webview' | 'webkit'
+  /** Required by `provider: 'pwa'`; identifies the installed app and browser profile. */
+  pwa?: InstalledPwaOptions
   /** In-process providers ('webview'/'webkit'): initial window size and title. */
   width?: number
   height?: number
@@ -57,7 +51,7 @@ export interface DesktopWindowOptions extends Omit<AppWindowOptions, 'appId' | '
 }
 
 /** User-facing CLI choice; `webview` maps to WebView2 on Windows and WebKitGTK on Linux. */
-export type CliWindowProvider = 'browser' | 'webview'
+export type CliWindowProvider = 'browser' | 'pwa' | 'webview'
 
 export interface DesktopUpdateOptions extends UpdaterOptions {
   checkOnStartup?: boolean
@@ -97,12 +91,6 @@ export interface DesktopAppOptions<WebSocketData = undefined, Routes extends str
     timeoutMs?: number
   }
   updates?: DesktopUpdateOptions
-  /**
-   * One functionality, three layers. Each action is reachable as
-   * `my-app <name> --arg value`, `POST /api/actions/<name>`, and the
-   * generated console at `/__bundesk/actions`.
-   */
-  actions?: DesktopActionOptions<WebSocketData>[]
   /** File associations and launcher entry; dispatched to the current platform (Windows registry / Linux XDG). */
   desktopIntegration?: DesktopIntegrationOptions
   /** System tray icon with menu. Windows is implemented; see src/runtime/tray.ts for platform status. */
@@ -129,7 +117,6 @@ export interface DesktopAppContext<WebSocketData = undefined> {
   /** Effective provider after applying a CLI --browser/--webview override. */
   windowProvider: NonNullable<DesktopWindowOptions['provider']> | null
   updater: Updater | null
-  actions: ActionRegistry
   tray: TrayController<WebSocketData> | null
   notify(options: DesktopNotificationOptions): Promise<boolean>
   launchWindow(options?: Partial<DesktopWindowOptions>): Promise<DesktopAppWindow | null>
@@ -149,7 +136,6 @@ export type DesktopAppStartResult<WebSocketData = undefined> =
     command: 'help' | 'version' | 'register' | 'unregister' | 'status' | 'upgrade' | 'install-service' | 'uninstall-service' | 'service-status'
     result: unknown
   }
-  | { kind: 'action'; action: string; result: unknown }
   | { kind: 'updated'; update: UpdateCheckResult }
 
 interface ParsedRuntimeArgs {
@@ -177,21 +163,16 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
   }
 
   async start(args: string[] = Bun.argv.slice(2)): Promise<DesktopAppStartResult<WebSocketData>> {
-    let currentContext: DesktopAppContext<WebSocketData> | undefined
-    const registry = createActionRegistry(this.options.actions ?? [], () => {
-      if (!currentContext) throw new Error('Actions were invoked before the app context was ready')
-      return currentContext
-    })
 
     if (args.includes('--help') || args.includes('-h')) {
-      return { kind: 'command', command: 'help', result: renderCliHelp(this.options, registry.list()) }
+      return { kind: 'command', command: 'help', result: renderCliHelp(this.options) }
     }
     if (args.includes('--version') || args.includes('-V')) {
       const name = this.options.cli?.name ?? this.options.id
       return { kind: 'command', command: 'version', result: `${name} ${this.options.version ?? 'unknown'}` }
     }
 
-    const parsed = registry.has(args[0] ?? '') ? parseActionModeArgs(args) : parseRuntimeArgs(args)
+    const parsed = parseRuntimeArgs(args)
     const env = resolveAppEnvironment(args)
     const cliWindowProvider = parsed.windowProvider && parsed.browser && parsed.command !== 'serve' && this.options.window !== false
       ? resolveCliWindowProvider(parsed.windowProvider)
@@ -224,10 +205,6 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
           await context.stop()
         }
         return
-      }
-      if (registry.has(event.argv[0] ?? '')) {
-        const outcome = await registry.callFromCli(event.argv)
-        return outcome?.result
       }
       return this.options.onSecondInstance?.(event, context)
     }
@@ -285,13 +262,13 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
     const stickyPortState = usesDynamicPort
       ? await readStickyPort(this.options.id, stickyPort)
       : { enabled: false, preferredPort: 0, recordPath: null }
-    const serverOptions = withActionRoutes({
+    const serverOptions = {
       ...configuredServerOptions,
       // Mode fills the default only; an explicit user setting always wins.
       development: this.options.server.development ?? env === 'development',
       hostname: parsed.host ?? ('hostname' in configuredServerOptions ? configuredServerOptions.hostname : undefined),
       port: usesDynamicPort ? stickyPortState.preferredPort : configuredPort,
-    } as Bun.Serve.Options<WebSocketData, Routes>, registry)
+    } as Bun.Serve.Options<WebSocketData, Routes>
     let server: Bun.Server<WebSocketData>
     try {
       server = Bun.serve(serverOptions)
@@ -332,7 +309,16 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       }
       const windowUrl = new URL(appUrl)
       if (merged.path) windowUrl.pathname = merged.path.startsWith('/') ? merged.path : `/${merged.path}`
-      if (merged.provider === 'webview') {
+      if (merged.provider === 'pwa') {
+        if (!merged.pwa) throw new Error("The pwa window provider requires window.pwa with an installed appId")
+        appWindow = await launchPwaWindow({
+          ...merged.pwa,
+          preferred: merged.preferred,
+          candidates: merged.candidates,
+          browserArgs: merged.browserArgs,
+          inheritOutput: merged.inheritOutput,
+        })
+      } else if (merged.provider === 'webview') {
         if (process.platform !== 'win32') {
           throw new Error('The webview window provider is only available on Windows')
         }
@@ -399,28 +385,14 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       window: appWindow,
       windowProvider: windowOptions ? cliWindowProvider ?? windowOptions.provider ?? 'browser' : null,
       updater,
-      actions: registry,
       tray,
       notify: (notification) => notifySystem(notification, { aumid: notificationsAumid }),
       launchWindow: launch,
       stop,
       wait,
     }
-    currentContext = context
     contextResolve?.(context)
 
-    if (registry.has(parsed.appArgs[0] ?? '')) {
-      const actionName = parsed.appArgs[0]!
-      let result: unknown
-      try {
-        result = (await registry.callFromCli(parsed.appArgs))?.result
-      } catch (error) {
-        await stop()
-        throw error
-      }
-      await stop()
-      return { kind: 'action', action: actionName, result }
-    }
 
     if (this.options.tray) {
       const trayOptions = this.options.tray
@@ -451,10 +423,10 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       context.tray = tray
     }
 
-    if (windowOptions && parsed.browser && parsed.command !== 'serve') {
-      context.window = await launch()
-    }
     try {
+      if (windowOptions && parsed.browser && parsed.command !== 'serve') {
+        context.window = await launch()
+      }
       await this.options.onReady?.(context)
     } catch (error) {
       await stop()
@@ -469,9 +441,9 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       ? await replaceHotRun(this.options.id, () => this.start(args))
       : await this.start(args)
     if (result.kind === 'primary' && !hotMode) await result.wait()
-    if (result.kind === 'command' || result.kind === 'action') {
+    if (result.kind === 'command') {
       console.log(
-        result.kind === 'command' && (result.command === 'help' || result.command === 'version')
+        result.command === 'help' || result.command === 'version'
           ? String(result.result)
           : JSON.stringify(result.result, null, 2),
       )
@@ -526,13 +498,11 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
 
 function renderCliHelp<WebSocketData, Routes extends string>(
   options: DesktopAppOptions<WebSocketData, Routes>,
-  actions: ReturnType<ActionRegistry['list']>,
 ): string {
   const name = options.cli?.name ?? options.id
   const lines = [
     ...(options.cli?.description ? [options.cli.description, ''] : []),
     `Usage: ${name} [command] [options]`,
-    ...(actions.length > 0 ? [`       ${name} <action> [arguments]`] : []),
     '',
     'Commands:',
     '  serve                         Run the HTTP server without opening a window',
@@ -552,16 +522,6 @@ function renderCliHelp<WebSocketData, Routes extends string>(
   )
   if (options.updates) lines.push('  upgrade [--force]              Check for and install an update')
 
-  if (actions.length > 0) {
-    lines.push('', 'Actions:')
-    for (const action of actions) {
-      const args = action.args.map((arg) => {
-        const flag = `--${arg.name}${arg.type === 'boolean' ? '' : ` <${arg.type}>`}`
-        return arg.required ? flag : `[${flag}]`
-      }).join(' ')
-      lines.push(`  ${action.name}${args ? ` ${args}` : ''}${action.description ? `\n      ${action.description}` : ''}`)
-    }
-  }
 
   lines.push(
     '',
@@ -569,8 +529,9 @@ function renderCliHelp<WebSocketData, Routes extends string>(
     '  -h, --help                   Show this help and exit',
     '  -V, --version                Show the application version and exit',
     '      --browser                Open with the system Chromium browser',
+    '      --pwa                    Open the configured installed Chromium PWA',
     '      --webview                Open with the platform-native embedded WebView',
-    '      --provider <provider>    Select browser or webview',
+    '      --provider <provider>    Select browser, pwa, or webview',
     '      --no-browser             Run without opening a desktop window',
     '  -H, --host <hostname>        Override the server hostname',
     '  -p, --port <port>            Override the server port (0-65535)',
@@ -593,30 +554,17 @@ export function resolveCliWindowProvider(
   provider: CliWindowProvider,
   platform: NodeJS.Platform = process.platform,
 ): NonNullable<DesktopWindowOptions['provider']> {
-  if (provider === 'browser') return 'browser'
+  if (provider === 'browser' || provider === 'pwa') {
+    if (provider === 'pwa' && platform === 'linux' && isTermux()) {
+      throw new Error('The pwa provider is not available on Termux')
+    }
+    return provider
+  }
   if (platform === 'win32') return 'webview'
   if (platform === 'linux' && !isTermux()) return 'webkit'
   throw new Error(`The webview provider is not available on ${platform}`)
 }
 
-function withActionRoutes<WebSocketData, Routes extends string>(
-  options: Bun.Serve.Options<WebSocketData, Routes>,
-  registry: ActionRegistry,
-): Bun.Serve.Options<WebSocketData, Routes> {
-  if (registry.list().length === 0) return options
-  const userRoutes = options.routes
-  if (!userRoutes || typeof userRoutes !== 'object') return options
-  const reserved = [actionsApiPath, `${actionsApiPath}/:name`, actionsConsolePath]
-  if (reserved.some((path) => path in userRoutes)) return options
-  return {
-    ...options,
-    routes: {
-      ...userRoutes,
-      ...actionsApiRoutes(registry),
-      [actionsConsolePath]: actionsConsoleResponse,
-    } as unknown as Bun.Serve.Routes<WebSocketData, Routes>,
-  }
-}
 
 function unsupportedIntegrationResult(): WindowsIntegrationResult {
   return {
@@ -657,6 +605,9 @@ function parseRuntimeArgs(args: string[]): ParsedRuntimeArgs {
     } else if (arg === '--webview') {
       parsed.browser = true
       parsed.windowProvider = 'webview'
+    } else if (arg === '--pwa') {
+      parsed.browser = true
+      parsed.windowProvider = 'pwa'
     } else if (arg === '--provider') {
       parsed.browser = true
       parsed.windowProvider = parseCliWindowProvider(args[++index], arg)
@@ -692,36 +643,11 @@ function parseRuntimeArgs(args: string[]): ParsedRuntimeArgs {
 }
 
 function parseCliWindowProvider(value: string | undefined, flag: string): CliWindowProvider {
-  if (value === 'browser' || value === 'webview') return value
-  if (!value || value.startsWith('--')) throw new Error(`${flag} requires browser or webview`)
-  throw new Error(`Invalid window provider: ${value} (expected browser or webview)`)
+  if (value === 'browser' || value === 'pwa' || value === 'webview') return value
+  if (!value || value.startsWith('--')) throw new Error(`${flag} requires browser, pwa, or webview`)
+  throw new Error(`Invalid window provider: ${value} (expected browser, pwa, or webview)`)
 }
 
-/**
- * An action invocation owns the whole argv line: framework flags like
- * `--no-browser` become action arguments. Only the update-restart markers are
- * still consumed, because they are appended by `installAndRestart`.
- */
-function parseActionModeArgs(args: string[]): ParsedRuntimeArgs {
-  const parsed: ParsedRuntimeArgs = {
-    appArgs: [],
-    browser: false,
-    dryRun: false,
-    makeDefault: false,
-    force: false,
-    afterUpdate: false,
-  }
-  for (const arg of args) {
-    if (arg === '--bun-desktop-after-update') {
-      parsed.afterUpdate = true
-    } else if (arg.startsWith('--bun-desktop-wait-for-pid=')) {
-      parsed.waitForPid = Number.parseInt(arg.slice(arg.indexOf('=') + 1), 10)
-    } else {
-      parsed.appArgs.push(arg)
-    }
-  }
-  return parsed
-}
 
 function parsePort(value: string | undefined): number {
   const port = Number.parseInt(value ?? '', 10)

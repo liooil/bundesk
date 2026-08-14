@@ -389,7 +389,6 @@ function digest(bytes: ArrayBuffer): string {
   return hasher.digest('hex')
 }
 
-export * from './runtime/actions'
 export * from './runtime/app'
 export * from './runtime/environment'
 export * from './runtime/browser'

@@ -3,7 +3,6 @@
  *
  * - fullstack HTML page (HTML import route, HMR in dev, AOT in prod)
  * - window providers: 'webview' on Windows, 'webkit' on Linux, 'browser' elsewhere
- * - actions: one functionality on all three layers (cli + api + gui console)
  * - tray (Windows), notifications, single instance, desktop integration
  * - the resolved runtime environment (context.env) and `--smoke` for CI
  */
@@ -74,14 +73,6 @@ const app = createDesktopApp({
       description: 'BunDesk demo document',
     }],
   },
-  actions: [
-    {
-      name: 'greet',
-      description: 'Greet someone — available on cli, api and the gui console',
-      args: [{ name: 'name', type: 'string', required: true, description: 'Who to greet' }],
-      handler: ({ name }, context) => ({ greeting: `Hello, ${String(name)}!`, env: context.env }),
-    },
-  ],
   onReady: async (context) => {
     notify = context.notify
     appContextEnv = context.env
@@ -95,13 +86,9 @@ function providerName(): 'webview' | 'webkit' | 'browser' {
 }
 
 if (Bun.argv.slice(2).includes('--smoke')) {
-  // Headless CI check: server + actions, no window. Exercises the same code
-  // path as a real run without needing a display.
+  // Headless CI check: server only, no window. Exercises the same code path
+  // as a real run without needing a display.
   const result = await app.start(['--no-browser'])
-  if (result.kind === 'action') {
-    console.log(`[smoke] action result: ${JSON.stringify(result.result)}`)
-    process.exit(0)
-  }
   if (result.kind === 'primary') {
     const info = await fetch(new URL('/api/info', result.url)).then((response) => response.json()) as { id: string }
     console.log(`[smoke] server ok: ${result.url.href} id=${info.id} env=${result.env}`)

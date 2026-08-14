@@ -54,11 +54,10 @@ BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要
 ## 核心功能
 
 - `createDesktopApp(...)` 一体化托管 server、窗口和生命周期；
-- **cli + api + gui 三层**：action 注册一次，自动获得 `my-app <name>` CLI、`POST /api/actions/<name>` API 和 `/__bundesk/actions` 控制台页；
 - `launchAppWindow(...)` 等组合式底层 API；
 - Edge/Chrome/Chromium `--app=<url>` 独立窗口（macOS 含 Brave），Termux 走 Android VIEW intent；
 - 带随机 256-bit token 的 loopback IPC 单实例；
-- 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调，action 结果可回传；
+- 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调；
 - 静态二进制 URL/ETag/SHA-256 和 GitHub Releases 两种升级 provider；
 - 下载校验、原子替换、失败回滚、重启和旧版本清理；
 - 系统通知（Windows WinRT toast，经 PowerShell 桥；Linux notify-send / macOS osascript / Termux termux-notification）；
@@ -156,11 +155,12 @@ await app.run()
 
 ```text
 my-app                         启动 server 和浏览器窗口
-my-app --help                  显示根据配置与 actions 生成的帮助并退出
+my-app --help                  显示根据配置生成的帮助并退出
 my-app --version               显示应用名称和版本并退出
 my-app --browser               强制使用系统浏览器 provider
+my-app --pwa                   打开配置的已安装 Chromium PWA
 my-app --webview               强制使用当前平台的进程内 WebView
-my-app --provider browser      显式选择 browser（也可设为 webview）
+my-app --provider pwa          显式选择 browser、pwa 或 webview
 my-app <file>                  启动或把文件参数转发给主实例
 my-app serve --no-browser      只启动 HTTP server
 my-app register [--default]    注册当前用户文件关联和 launcher
@@ -172,7 +172,7 @@ my-app service-status          查看服务状态
 my-app upgrade [--force]       检查、安装升级并重启
 ```
 
-`-h` 等价于 `--help`，`-V` 等价于 `--version`。可用 `cli.name`、`cli.description` 和 `cli.options` 定制帮助中显示的名称、说明和应用专属选项；框架命令与 actions 会自动列出。
+`-h` 等价于 `--help`，`-V` 等价于 `--version`。可用 `cli.name`、`cli.description` 和 `cli.options` 定制帮助中显示的名称、说明和应用专属选项；框架命令会自动列出。
 
 `register` 只写 `HKCU`，不要求管理员权限。`--default` 写当前用户的扩展名默认 ProgID，但不会绕过 Windows 的 `UserChoice` 保护。
 
@@ -182,14 +182,13 @@ my-app upgrade [--force]       检查、安装升级并重启
 
 - **全栈页面**(HTML import 路由——开发时热更新,编译产物 AOT)
 - **窗口 provider**:Windows 用 `webview`、Linux 用 `webkit`、其他平台 `browser`——运行时按 `process.platform` 选择
-- **三层 actions**:`example-app greet --name World`(cli)、`POST /api/actions/greet`(api)、自动生成的 console 页(gui)
 - **托盘**(Windows + Linux)、**通知**、**单实例**、**桌面集成**(`register` / `unregister` / `status`)、解析出的**运行环境**(`context.env`)
-- 供 CI 无头验证的 `--smoke` 模式(服务 + actions,不开窗口)
+- 供 CI 无头验证的 `--smoke` 服务模式（不开窗口）
 
 ```bash
 cd example-app
 bun run dev        # 打开桌面窗口(dev 环境,HMR 生效)
-bun run smoke      # 无头检查:服务 + actions,不开窗口
+bun run smoke      # 无头服务检查，不开窗口
 bun run build      # 构建当前平台的产物
 bun run build:win  # 强制 Windows 目标
 ```
@@ -213,53 +212,6 @@ import {
 ```
 
 这些模块与 `createDesktopApp` 使用同一实现，不存在第二套行为。
-
-## cli + api + gui 三层
-
-BunDesk 的核心理念之一：**一个 app 由 cli、api、gui 三层构成，同一功能可以在三层都有**。注册一次 action，框架自动把它暴露到三层，handler 只在应用进程里跑一次：
-
-| 层 | 入口 |
-| --- | --- |
-| CLI | `my-app <name> --arg value ...` |
-| API | `POST /api/actions/<name>`，JSON body 传命名参数；`GET /api/actions` 返回 schema |
-| GUI | `/__bundesk/actions` 生成的控制台页，按 schema 渲染表单并调用同一 API |
-
-```ts
-const app = createDesktopApp({
-  id: 'my-company.my-app',
-  server: { port: 0, routes: { '/': new Response('Hello') } },
-  actions: [{
-    name: 'export',
-    description: 'Export the current document',
-    args: [
-      { name: 'format', type: 'string', default: 'json' },
-      { name: 'pretty', type: 'boolean', default: true },
-    ],
-    async handler(args, context) {
-      // 同一实现：CLI、API、GUI 都走到这里
-      return { exported: true, format: args.format, pretty: args.pretty }
-    },
-  }],
-})
-```
-
-三种调用等价：
-
-```bash
-my-app export --format csv --pretty=false
-curl -X POST http://127.0.0.1:PORT/api/actions/export \
-  -H 'content-type: application/json' -d '{"format":"csv","pretty":false}'
-# 浏览器打开 http://127.0.0.1:PORT/__bundesk/actions
-```
-
-行为约定：
-
-- CLI 调用 `my-app <action>` 时，首个参数匹配注册的 action 名即进入 action 模式，之后的 `--flag value` 全部作为 action 参数（框架命令如 `serve`/`register` 优先）。
-- 单实例运行中时，CLI action 通过 loopback IPC 转发给主实例执行，**结果 JSON 原样回传**打印；未运行时则就地启动、执行、退出。
-- action 结果必须是 JSON 可序列化的（IPC 与 API 都走 JSON）。
-- handler 收到完整 `context`（server、url、window、updater、actions、launchWindow、stop），action 也可以调用 `context.actions.call(...)` 组合其他 action。
-- `server` 配置使用 `routes` 时，框架自动合并 `/api/actions`、`/api/actions/:name`、`/__bundesk/actions` 三个保留路径；使用 `fetch` 兜底且没有 `routes` 时不会自动挂载，但 `context.actions` 与 CLI 层不受影响。actions API 默认随 server 绑定（默认 127.0.0.1），请勿在无鉴权时把 hostname 暴露到 0.0.0.0。
-- action 名必须是 kebab-case，且不能与框架命令（`serve`、`register`、`unregister`、`status`、`upgrade`）重名。
 
 ## 运行环境（development / production）
 
@@ -553,6 +505,44 @@ await context.notify({
 - 默认 toast 以 "Windows PowerShell" 为来源名；配置 `{ aumid }` 并以该 AUMID 创建开始菜单快捷方式后，toast 以你的应用名义出现；
 - 点击回调需要 toast activation（启动参数 + 前台激活），列入 roadmap。
 
+## 已安装 PWA 窗口
+
+`pwa` provider 通过 Chromium app id 启动已经安装在
+Edge/Chrome/Brave/Chromium 中的 Web App：
+
+```ts
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  // 已安装 PWA 的 start URL 必须指向这个稳定 origin。
+  server: { port: 43123, routes: { '/': page } },
+  window: {
+    provider: 'pwa',
+    pwa: {
+      appId: 'abcdefghijklmnopabcdefghijklmnop',
+      profileDirectory: 'Default',
+      // 标准浏览器可省略；这是浏览器 user-data 根目录，不是单个 profile 目录。
+      // userDataDir: 'C:/Users/me/AppData/Local/Microsoft/Edge/User Data',
+    },
+  },
+})
+```
+
+- BunDesk 用 `--app-id`、`--user-data-dir` 和 `--profile-directory` 启动
+  Chromium，不会回退成 URL App Mode。
+- PWA 必须已经安装在该浏览器 profile 中。启动前会检查
+  `Web Applications/Manifest Resources/<appId>`，缺失时明确报错，不会静默打开普通 tab。
+- 安装流程、Web App Manifest、Service Worker、图标、scope 和 `start_url`
+  由应用负责；BunDesk 不修改浏览器策略或 profile 数据库来安装普通 PWA。
+- 必须使用固定 server origin。已安装 PWA 从 manifest 的 `start_url`
+  启动；`window.path` 或运行时重新选择的动态端口无法重定向已安装应用。
+- Windows、Linux、macOS 上的标准 Edge、Chrome、Brave、Chromium 可自动推断
+  `userDataDir`；便携版或非标准浏览器应显式配置。
+- 共用浏览器 profile 时，请求可能交给已经运行的浏览器，因此返回的 subprocess
+  只跟踪启动器，不一定跟踪真实 PWA 窗口。若 BunDesk 后端需要独立存活，应设置
+  `exitWithWindow: false`。
+
+CLI `--pwa`（或 `--provider pwa`）选择该 provider。Firefox 和 Termux 不支持。
+
 ## WebView2 窗口（Windows）
 
 除了用系统浏览器打开 App Mode 窗口外，窗口也可以由 WebView2 进程内托管（使用系统 WebView2 Runtime / Edge 统一运行时，不捆绑任何东西）：
@@ -565,7 +555,7 @@ const app = createDesktopApp({
     routes: { '/': new Response('<h1>Hello</h1>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
   },
   window: {
-    provider: 'webview',          // 'browser'（默认）或 'webview'
+    provider: 'webview',          // 'browser'（默认）、'pwa' 或 'webview'
     path: '/',
     width: 900,
     height: 640,
@@ -583,7 +573,7 @@ const app = createDesktopApp({
 
 各平台窗口 provider（`provider: 'browser'` 为默认，全平台可用；优先使用 Chromium App Mode，未找到时回退到隔离的 Firefox 窗口）：
 
-CLI 可用 `--browser` / `--webview`（或 `--provider browser|webview`）覆盖配置。CLI 的 `webview` 是跨平台抽象：Windows 映射为 `webview`，Linux 映射为 `webkit`；不支持进程内 WebView 的平台会直接报错。`--no-browser` 仍表示不打开任何窗口。配置文件中的 `window.provider` 使用下表的原始 provider 名称。
+CLI 可用 `--browser` / `--pwa` / `--webview`（或 `--provider browser|pwa|webview`）覆盖配置。CLI 的 `webview` 是跨平台抽象：Windows 映射为 `webview`，Linux 映射为 `webkit`；不支持进程内 WebView 的平台会直接报错。`--no-browser` 仍表示不打开任何窗口。配置文件中的 `window.provider` 使用下表的原始 provider 名称。
 
 | 平台 | 进程内 provider | 状态 | 机制 |
 | --- | --- | --- | --- |
@@ -693,6 +683,7 @@ https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 | --- | --- | --- | --- | --- |
 | HTTP server / 生命周期 | 支持 | 支持 | 支持 | 支持 |
 | 浏览器 / 进程内 WebView 窗口 | 支持 / 支持 | 支持 / 支持（WebKitGTK） | 支持 / 不支持 | VIEW intent / 不支持 |
+| 已安装 Chromium PWA | 支持 | 支持 | 支持 | 不支持 |
 | 安全单实例与参数转发 | 支持 | 支持 | 支持 | 支持 |
 | 单文件构建 / `.app` bundle | 单文件 EXE | 单文件 | `.app` bundle | n/a |
 | 交叉构建 | 任意平台 → EXE | 任意平台 → 单文件 | Linux/macOS → `.app` | n/a |
@@ -713,7 +704,6 @@ Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`
 - macOS 运行时支持（浏览器候选、数据目录、darwin 升级 asset）与 `.app` bundle 构建（Info.plist、UTI/文档类型、URL scheme、图标、ad-hoc codesign）；
 - Linux XDG 文件关联、desktop entry、mimeapps 注册（`register`/`unregister`/`status`）；
 - Termux（Android）检测与 VIEW intent 窗口；
-- **cli + api + gui 三层 action 注册表**（CLI 转发结果回传、`/api/actions`、`/__bundesk/actions` 控制台页）；
 - 服务注册（Windows Run key / systemd / launchd / termux-boot）、Windows 系统托盘（纯 Win32 FFI）与系统通知（WinRT toast 桥、notify-send、osascript、termux-notification）。
 
 待评估：
@@ -733,7 +723,7 @@ bun test
 bun run pack:check
 ```
 
-测试覆盖：真实 Windows/Linux 单文件构建与执行、macOS `.app` 交叉构建结构（Mach-O、Info.plist）、Windows PE metadata/manifest、真实 Chromium App Mode 进程、安全单实例转发、action 三层的 API/CLI/转发结果回传、Linux XDG 注册往返、静态升级安装、GitHub release provider，以及 Windows 注册表 dry-run。
+测试覆盖：真实 Windows/Linux 单文件构建与执行、macOS `.app` 交叉构建结构（Mach-O、Info.plist）、Windows PE metadata/manifest、真实 Chromium App Mode 进程、安全单实例转发、Linux XDG 注册往返、静态升级安装、GitHub release provider，以及 Windows 注册表 dry-run。
 
 ## License
 

@@ -1,4 +1,5 @@
-import { mkdir } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { getAppDataDirectory } from './paths'
 import { isTermux } from './platform'
@@ -21,6 +22,20 @@ export interface AppWindowOptions extends FindBrowserOptions {
   browserArgs?: string[]
   /** Override Firefox discovery, primarily for portable installations. */
   firefoxCandidates?: string[]
+  inheritOutput?: boolean
+}
+
+export interface InstalledPwaOptions {
+  /** Chromium web-app id (32 lowercase characters in the `a`-`p` alphabet). */
+  appId: string
+  /** Browser profile containing the installed PWA. Defaults to `Default`. */
+  profileDirectory?: string
+  /** Browser user-data root. Inferred for Edge/Chrome/Brave/Chromium when omitted. */
+  userDataDir?: string
+}
+
+export interface PwaWindowOptions extends FindBrowserOptions, InstalledPwaOptions {
+  browserArgs?: string[]
   inheritOutput?: boolean
 }
 
@@ -209,5 +224,89 @@ export async function launchAppWindow(options: AppWindowOptions): Promise<Bun.Su
   }
 
   await openWithSystemBrowser(url, options.inheritOutput !== false)
+  return null
+}
+
+/**
+ * Launch an already-installed Chromium PWA by its app id. BunDesk deliberately
+ * does not modify browser policy or profile databases to install web apps.
+ */
+export async function launchPwaWindow(options: PwaWindowOptions): Promise<Bun.Subprocess> {
+  if (isTermux()) throw new Error('The PWA window provider is not available on Termux')
+  if (!/^[a-p]{32}$/.test(options.appId)) {
+    throw new Error('PWA appId must be 32 lowercase characters in the a-p alphabet')
+  }
+  const profileDirectory = options.profileDirectory ?? 'Default'
+  if (
+    !profileDirectory ||
+    profileDirectory === '.' ||
+    profileDirectory === '..' ||
+    profileDirectory.includes('/') ||
+    profileDirectory.includes('\\')
+  ) {
+    throw new Error('PWA profileDirectory must be one browser profile directory name')
+  }
+  if (options.preferred === 'firefox') {
+    throw new Error('The PWA window provider requires Edge, Chrome, Brave, or Chromium')
+  }
+
+  const browser = await findChromiumBrowser(options)
+  if (!browser) throw new Error('The PWA window provider requires an installed Chromium browser')
+  const userDataDir = options.userDataDir ?? defaultChromiumUserDataDirectory(browser)
+  if (!userDataDir) {
+    throw new Error(`Cannot infer the user-data directory for ${browser}; set window.pwa.userDataDir`)
+  }
+
+  const manifestResources = join(
+    userDataDir,
+    profileDirectory,
+    'Web Applications',
+    'Manifest Resources',
+    options.appId,
+  )
+  const installed = await stat(manifestResources).then((value) => value.isDirectory()).catch(() => false)
+  if (!installed) {
+    throw new Error(
+      `PWA ${options.appId} is not installed in browser profile ${profileDirectory}: ${manifestResources}`,
+    )
+  }
+
+  const output = options.inheritOutput === false ? 'ignore' : 'inherit'
+  console.info(`[BunDesk] Opening installed PWA ${options.appId}: ${browser}`)
+  return Bun.spawn([
+    browser,
+    `--app-id=${options.appId}`,
+    `--user-data-dir=${userDataDir}`,
+    `--profile-directory=${profileDirectory}`,
+    ...(options.browserArgs ?? []),
+  ], {
+    stdio: ['ignore', output, output],
+  })
+}
+
+function defaultChromiumUserDataDirectory(browser: string): string | null {
+  const executable = browser.replaceAll('\\', '/').toLowerCase()
+  if (process.platform === 'win32') {
+    const localAppData = process.env.LOCALAPPDATA ?? join(homedir(), 'AppData', 'Local')
+    if (executable.includes('msedge')) return join(localAppData, 'Microsoft', 'Edge', 'User Data')
+    if (executable.includes('chrome')) return join(localAppData, 'Google', 'Chrome', 'User Data')
+    if (executable.includes('brave')) return join(localAppData, 'BraveSoftware', 'Brave-Browser', 'User Data')
+    if (executable.includes('chromium')) return join(localAppData, 'Chromium', 'User Data')
+    return null
+  }
+  if (process.platform === 'darwin') {
+    const applicationSupport = join(homedir(), 'Library', 'Application Support')
+    if (executable.includes('microsoft edge')) return join(applicationSupport, 'Microsoft Edge')
+    if (executable.includes('google chrome')) return join(applicationSupport, 'Google', 'Chrome')
+    if (executable.includes('brave browser')) return join(applicationSupport, 'BraveSoftware', 'Brave-Browser')
+    if (executable.includes('chromium')) return join(applicationSupport, 'Chromium')
+    return null
+  }
+
+  const config = process.env.XDG_CONFIG_HOME ?? join(homedir(), '.config')
+  if (executable.includes('microsoft-edge')) return join(config, 'microsoft-edge')
+  if (executable.includes('google-chrome')) return join(config, 'google-chrome')
+  if (executable.includes('brave')) return join(config, 'BraveSoftware', 'Brave-Browser')
+  if (executable.includes('chromium')) return join(config, 'chromium')
   return null
 }

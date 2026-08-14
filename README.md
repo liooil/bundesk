@@ -54,11 +54,10 @@ BunDesk suits tool-style desktop apps built around a local HTTP service plus a W
 ## Core features
 
 - `createDesktopApp(...)` hosts the server, windows and lifecycle in one place;
-- **one functionality, three layers (cli + api + gui)**: register an action once and automatically get the `my-app <name>` CLI, the `POST /api/actions/<name>` API and the `/__bundesk/actions` console page;
 - low-level composable APIs such as `launchAppWindow(...)`;
 - standalone Edge/Chrome/Chromium `--app=<url>` windows (Brave included on macOS); Termux uses the Android VIEW intent;
 - loopback IPC single instance with a random 256-bit token;
-- secondary instances forward `argv`, `cwd` and PID to the primary instance's callback, and action results can be sent back;
+- secondary instances forward `argv`, `cwd` and PID to the primary instance's callback;
 - two update providers: static binary URL/ETag/SHA-256 and GitHub Releases;
 - download verification, atomic replacement, rollback on failure, restart and cleanup of old versions;
 - system notifications (Windows WinRT toast via a PowerShell bridge; Linux notify-send / macOS osascript / Termux termux-notification);
@@ -156,11 +155,12 @@ The framework reserves the following app commands:
 
 ```text
 my-app                         start the server and a browser window
-my-app --help                  print help generated from the config and actions, then exit
+my-app --help                  print help generated from the config, then exit
 my-app --version               print the application name and version, then exit
 my-app --browser               force the system browser provider
+my-app --pwa                   open the configured installed Chromium PWA
 my-app --webview               force the platform-native in-process WebView
-my-app --provider browser      explicitly select browser (or webview)
+my-app --provider pwa          explicitly select browser, pwa, or webview
 my-app <file>                  start, or forward the file argument to the primary instance
 my-app serve --no-browser      start only the HTTP server
 my-app register [--default]    register per-user file associations and a launcher
@@ -172,7 +172,7 @@ my-app service-status          show service status
 my-app upgrade [--force]       check for, install and restart after an upgrade
 ```
 
-`-h` is equivalent to `--help`, and `-V` to `--version`. Use `cli.name`, `cli.description`, and `cli.options` to customize the displayed name, description, and application-specific options; framework commands and actions are listed automatically.
+`-h` is equivalent to `--help`, and `-V` to `--version`. Use `cli.name`, `cli.description`, and `cli.options` to customize the displayed name, description, and application-specific options; framework commands are listed automatically.
 
 `register` only writes `HKCU` and requires no administrator privileges. `--default` writes the per-user default ProgID for the extension, but does not bypass Windows' `UserChoice` protection.
 
@@ -186,18 +186,15 @@ the npm package). It demonstrates:
   compiled binary)
 - **window providers**: `webview` on Windows, `webkit` on Linux, `browser`
   elsewhere — picked at runtime from `process.platform`
-- **actions** on all three layers: `example-app greet --name World` (cli),
-  `POST /api/actions/greet` (api), the generated console page (gui)
 - **tray** (Windows + Linux), **notifications**, **single instance**, **desktop
   integration** (`register` / `unregister` / `status`), the resolved
   **runtime environment** (`context.env`)
-- a headless `--smoke` mode used by CI to verify server + actions without a
-  display
+- a headless `--smoke` mode used by CI to verify the server without a display
 
 ```bash
 cd example-app
 bun run dev        # open the desktop window (dev environment, HMR active)
-bun run smoke      # headless check: server + actions, no window
+bun run smoke      # headless server check, no window
 bun run build      # build the executables for the current OS
 bun run build:win  # force a Windows target
 ```
@@ -223,53 +220,6 @@ import {
 ```
 
 These modules share the same implementation as `createDesktopApp`; there is no second set of behaviors.
-
-## cli + api + gui three layers
-
-One of BunDesk's core ideas: **an app consists of three layers — cli, api, gui — and the same functionality can exist on all three**. Register an action once and the framework automatically exposes it on all three layers; the handler runs exactly once in the app process:
-
-| Layer | Entry point |
-| --- | --- |
-| CLI | `my-app <name> --arg value ...` |
-| API | `POST /api/actions/<name>`, named parameters in the JSON body; `GET /api/actions` returns the schema |
-| GUI | the console page generated at `/__bundesk/actions`, which renders a form from the schema and calls the same API |
-
-```ts
-const app = createDesktopApp({
-  id: 'my-company.my-app',
-  server: { port: 0, routes: { '/': new Response('Hello') } },
-  actions: [{
-    name: 'export',
-    description: 'Export the current document',
-    args: [
-      { name: 'format', type: 'string', default: 'json' },
-      { name: 'pretty', type: 'boolean', default: true },
-    ],
-    async handler(args, context) {
-      // One implementation: CLI, API and GUI all land here
-      return { exported: true, format: args.format, pretty: args.pretty }
-    },
-  }],
-})
-```
-
-All three invocations are equivalent:
-
-```bash
-my-app export --format csv --pretty=false
-curl -X POST http://127.0.0.1:PORT/api/actions/export \
-  -H 'content-type: application/json' -d '{"format":"csv","pretty":false}'
-# open http://127.0.0.1:PORT/__bundesk/actions in a browser
-```
-
-Behavioral conventions:
-
-- When the CLI runs `my-app <action>`, the first argument matching a registered action name enters action mode, and everything after it (`--flag value`) is passed as action arguments (framework commands such as `serve`/`register` take precedence).
-- When a single instance is already running, CLI actions are forwarded to the primary instance over loopback IPC, and the **result JSON is returned verbatim** and printed; when nothing is running, the app starts in place, executes and exits.
-- Action results must be JSON-serializable (both IPC and API use JSON).
-- The handler receives the full `context` (server, url, window, updater, actions, launchWindow, stop), and an action can call `context.actions.call(...)` to compose other actions.
-- When the `server` config uses `routes`, the framework automatically merges in the three reserved paths `/api/actions`, `/api/actions/:name` and `/__bundesk/actions`; with a `fetch` fallback and no `routes`, they are not auto-mounted, but `context.actions` and the CLI layer are unaffected. The actions API binds together with the server by default (127.0.0.1 by default) — do not expose the hostname on 0.0.0.0 without authentication.
-- Action names must be kebab-case and must not collide with framework commands (`serve`, `register`, `unregister`, `status`, `upgrade`).
 
 ## Runtime environment (development / production)
 
@@ -611,6 +561,51 @@ Known trade-offs:
 - by default the toast shows "Windows PowerShell" as the source name; after configuring `{ aumid }` and creating a Start Menu shortcut with that AUMID, toasts appear under your app's name;
 - click callbacks need toast activation (launch arguments + foreground activation), on the roadmap.
 
+## Installed PWA windows
+
+The `pwa` provider launches an already-installed Edge/Chrome/Brave/Chromium
+web app by its Chromium app id:
+
+```ts
+const app = createDesktopApp({
+  id: 'my-company.my-app',
+  // The installed PWA start URL must point at this stable origin.
+  server: { port: 43123, routes: { '/': page } },
+  window: {
+    provider: 'pwa',
+    pwa: {
+      appId: 'abcdefghijklmnopabcdefghijklmnop',
+      profileDirectory: 'Default',
+      // Optional for known browsers; this is the browser user-data root,
+      // not the individual profile directory.
+      // userDataDir: 'C:/Users/me/AppData/Local/Microsoft/Edge/User Data',
+    },
+  },
+})
+```
+
+- BunDesk launches Chromium with `--app-id`, `--user-data-dir`, and
+  `--profile-directory`; it does not fall back to URL App Mode.
+- The PWA must already be installed in that browser profile. BunDesk validates
+  its `Web Applications/Manifest Resources/<appId>` directory before launch
+  and reports a missing installation instead of silently opening a tab.
+- Installation, the web app manifest, service worker, icons, scope, and
+  `start_url` belong to the application. BunDesk does not mutate browser policy
+  or profile databases to install ordinary PWAs.
+- Use a fixed server origin. The installed PWA launches its manifest
+  `start_url`; `window.path` and a newly selected dynamic port cannot retarget
+  an installed app.
+- `userDataDir` is inferred for standard Edge, Chrome, Brave, and Chromium
+  installations on Windows, Linux, and macOS. Set it explicitly for portable
+  or nonstandard browsers.
+- A shared browser profile may hand the request to an already-running browser,
+  so the returned subprocess tracks the launcher rather than the actual PWA
+  window. Use `exitWithWindow: false` when the BunDesk backend must remain
+  alive independently of that launcher.
+
+CLI `--pwa` (or `--provider pwa`) selects this configured provider. Firefox and
+Termux are not supported.
+
 ## WebView2 windows (Windows)
 
 Besides launching the system browser in App Mode, a window can be hosted
@@ -625,7 +620,7 @@ const app = createDesktopApp({
     routes: { '/': new Response('<h1>Hello</h1>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
   },
   window: {
-    provider: 'webview',          // 'browser' (default) or 'webview'
+    provider: 'webview',          // 'browser' (default), 'pwa', or 'webview'
     path: '/',
     width: 900,
     height: 640,
@@ -657,11 +652,12 @@ const app = createDesktopApp({
 Window providers by platform (`provider: 'browser'` is the default everywhere;
 it prefers Chromium App Mode and falls back to an isolated Firefox window):
 
-The CLI can override the config with `--browser` / `--webview` (or
-`--provider browser|webview`). CLI `webview` is a cross-platform abstraction:
-it maps to `webview` on Windows and `webkit` on Linux; unsupported platforms
-fail with a clear error. `--no-browser` still means no window at all. The
-`window.provider` config property uses the literal provider names in the table.
+The CLI can override the config with `--browser`, `--pwa`, or `--webview`
+(equivalently `--provider browser|pwa|webview`). CLI `webview` is a
+cross-platform abstraction: it maps to `webview` on Windows and `webkit` on
+Linux; unsupported platforms fail with a clear error. `--no-browser` still
+means no window at all. The `window.provider` config property uses the literal
+provider names in the table.
 
 | Platform | In-process provider | Status | Mechanism |
 | --- | --- | --- | --- |
@@ -773,6 +769,7 @@ A custom mirror can be used via `runtime.downloadUrl`, and `runtime.sha256` pins
 | --- | --- | --- | --- | --- |
 | HTTP server / lifecycle | Yes | Yes | Yes | Yes |
 | Browser / in-process WebView window | Yes / Yes | Yes / Yes (WebKitGTK) | Yes / No | VIEW intent / No |
+| Installed Chromium PWA | Yes | Yes | Yes | No |
 | Secure single instance and argument forwarding | Yes | Yes | Yes | Yes |
 | Single-file build / `.app` bundle | single-file EXE | single file | `.app` bundle | n/a |
 | Cross-compilation | any platform → EXE | any platform → single file | Linux/macOS → `.app` | n/a |
@@ -793,7 +790,6 @@ Done (this round):
 - macOS runtime support (browser candidates, data directory, darwin update asset) and `.app` bundle builds (Info.plist, UTI/document types, URL schemes, icon, ad-hoc codesign);
 - Linux XDG file associations, desktop entries and mimeapps registration (`register`/`unregister`/`status`);
 - Termux (Android) detection and VIEW intent windows;
-- **the cli + api + gui three-layer action registry** (CLI forwarding with result return, `/api/actions`, the `/__bundesk/actions` console page);
 - service registration (Windows Run key / systemd / launchd / termux-boot), the Windows system tray (pure Win32 FFI) and system notifications (WinRT toast bridge, notify-send, osascript, termux-notification).
 
 To be evaluated:
@@ -813,7 +809,7 @@ bun test
 bun run pack:check
 ```
 
-Test coverage: real Windows/Linux single-file builds and execution, macOS `.app` cross-compiled bundle structure (Mach-O, Info.plist), Windows PE metadata/manifest, real Chromium App Mode processes, secure single-instance forwarding, the API/CLI/forwarded-result round trips across the action layers, Linux XDG registration round trips, static update installation, the GitHub release provider, and Windows registry dry-runs.
+Test coverage: real Windows/Linux single-file builds and execution, macOS `.app` cross-compiled bundle structure (Mach-O, Info.plist), Windows PE metadata/manifest, real Chromium App Mode processes, secure single-instance forwarding, Linux XDG registration round trips, static update installation, the GitHub release provider, and Windows registry dry-runs.
 
 ## License
 
