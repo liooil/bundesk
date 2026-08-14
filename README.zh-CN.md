@@ -169,6 +169,9 @@ my-app status                  查看桌面集成状态
 my-app install-service         注册为开机自启服务（headless serve）
 my-app uninstall-service       移除服务注册
 my-app service-status          查看服务状态
+my-app install-pwa             打开安装 URL 并等待用户在浏览器中确认
+my-app install-pwa --policy    通过 Edge/Chrome 企业策略强制安装
+my-app remove-pwa-policy       仅移除本应用的强制安装策略条目
 my-app upgrade [--force]       检查、安装升级并重启
 ```
 
@@ -505,21 +508,30 @@ await context.notify({
 - 默认 toast 以 "Windows PowerShell" 为来源名；配置 `{ aumid }` 并以该 AUMID 创建开始菜单快捷方式后，toast 以你的应用名义出现；
 - 点击回调需要 toast activation（启动参数 + 前台激活），列入 roadmap。
 
-## 已安装 PWA 窗口
+## PWA 安装与窗口
 
-`pwa` provider 通过 Chromium app id 启动已经安装在
-Edge/Chrome/Brave/Chromium 中的 Web App：
+`pwa` provider 通过 Chromium app id 启动 Edge/Chrome/Brave/Chromium Web
+App；BunDesk 也可以辅助完成首次安装：
 
 ```ts
 const app = createDesktopApp({
   id: 'my-company.my-app',
-  // 已安装 PWA 的 start URL 必须指向这个稳定 origin。
+  // PWA 必须使用稳定 origin，不能在这里使用动态端口。
   server: { port: 43123, routes: { '/': page } },
   window: {
     provider: 'pwa',
+    exitWithWindow: false,
+    preferred: 'edge',
     pwa: {
       appId: 'abcdefghijklmnopabcdefghijklmnop',
       profileDirectory: 'Default',
+      // 默认使用正在运行的应用 URL；外部托管的 PWA 可显式指定。
+      // installUrl: 'https://app.example.com/',
+      installTimeoutMs: 300_000,
+      policy: {
+        createDesktopShortcut: true,
+        customName: 'My App',
+      },
       // 标准浏览器可省略；这是浏览器 user-data 根目录，不是单个 profile 目录。
       // userDataDir: 'C:/Users/me/AppData/Local/Microsoft/Edge/User Data',
     },
@@ -527,21 +539,60 @@ const app = createDesktopApp({
 })
 ```
 
-- BunDesk 用 `--app-id`、`--user-data-dir` 和 `--profile-directory` 启动
-  Chromium，不会回退成 URL App Mode。
-- PWA 必须已经安装在该浏览器 profile 中。启动前会检查
-  `Web Applications/Manifest Resources/<appId>`，缺失时明确报错，不会静默打开普通 tab。
-- 安装流程、Web App Manifest、Service Worker、图标、scope 和 `start_url`
-  由应用负责；BunDesk 不修改浏览器策略或 profile 数据库来安装普通 PWA。
-- 必须使用固定 server origin。已安装 PWA 从 manifest 的 `start_url`
-  启动；`window.path` 或运行时重新选择的动态端口无法重定向已安装应用。
+### 交互式安装
+
+```bash
+my-app install-pwa
+```
+
+BunDesk 启动配置的 server，在指定浏览器 profile 中打开安装 URL，等待用户接受浏览器
+原生安装提示。安装完成通过 profile 文件系统事件检测，不使用固定 sleep 轮询；PWA
+已经安装时立即返回。若 server 已由另一个应用实例持有，该命令会转发给主实例并返回
+主实例的执行结果。
+
+### 企业策略安装
+
+```bash
+my-app install-pwa --policy
+my-app install-pwa --policy --dry-run
+my-app remove-pwa-policy
+```
+
+Windows 上，策略模式把该 URL 合并到当前用户 Microsoft Edge 或 Google Chrome 的
+强制 `WebAppInstallForceList` 注册表策略中。它保留无关条目，要求浏览器刷新指定
+profile，并等待配置的 `appId` 出现。该策略是 mandatory policy；条目生效期间，受
+影响的用户不能自行卸载这个 PWA。
+
+若机器级 `WebAppInstallForceList` 已包含该 URL，BunDesk 直接使用它，不再添加用户
+策略；若机器策略包含另一份列表，BunDesk 拒绝用用户策略遮蔽它，并要求交由管理员部署。
+
+`remove-pwa-policy` 只移除 URL 匹配的当前用户条目并保留其他条目；机器级强制条目
+不会被移除。移除策略要求不会卸载已经存在的 PWA。自动修改策略目前刻意只支持
+Windows。Chrome 在 Linux 和
+macOS、Edge 在 macOS 也支持同一策略，但这些系统要求管理员部署 policy 文件或配置
+描述文件；BunDesk 不尝试提权。
+
+官方格式参见
+[Microsoft Edge `WebAppInstallForceList` 策略](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/webappinstallforcelist)
+和 [Google Chrome 策略列表](https://chromeenterprise.google/policies/#WebAppInstallForceList)。
+
+### 启动行为与约束
+
+- BunDesk 用 `--app-id`、`--user-data-dir` 和 `--profile-directory` 启动已安装应用，
+  不会回退成 URL App Mode。
+- 安装状态通过 `Web Applications/Manifest Resources/<appId>` 确认；配置的 `appId`
+  不匹配时会超时并明确报错。
+- Web App Manifest、Service Worker、图标、scope 和 `start_url` 仍由应用负责。
+- 必须使用固定 server origin。已安装 PWA 从 manifest 的 `start_url` 启动；
+  `window.path` 或运行时重新选择的动态端口无法重定向已安装应用。
 - Windows、Linux、macOS 上的标准 Edge、Chrome、Brave、Chromium 可自动推断
   `userDataDir`；便携版或非标准浏览器应显式配置。
-- 共用浏览器 profile 时，请求可能交给已经运行的浏览器，因此返回的 subprocess
-  只跟踪启动器，不一定跟踪真实 PWA 窗口。若 BunDesk 后端需要独立存活，应设置
-  `exitWithWindow: false`。
+- 共用 browser profile 时，请求可能交给已经运行的浏览器；此时返回的 subprocess
+  只跟踪启动器而非真实 PWA 窗口。应设置 `exitWithWindow: false` 让后端独立存活。
+- 交互安装和启动支持 Edge、Chrome、Brave、Chromium；自动策略安装只支持 Windows
+  上的 Edge 和 Chrome。Firefox 与 Termux 不支持。
 
-CLI `--pwa`（或 `--provider pwa`）选择该 provider。Firefox 和 Termux 不支持。
+CLI `--pwa`（或 `--provider pwa`）只选择已安装 PWA 窗口 provider，不会执行安装命令。
 
 ## WebView2 窗口（Windows）
 

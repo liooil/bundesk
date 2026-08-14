@@ -18,6 +18,8 @@ export interface AcquireSingleInstanceOptions {
   cwd?: string
   onSecondInstance?: (event: SecondInstanceEvent) => void | Promise<unknown>
   timeoutMs?: number
+  /** Maximum time to wait for the primary handler's response. Defaults to 1.5 seconds. */
+  responseTimeoutMs?: number
 }
 
 export interface PrimaryInstance {
@@ -86,7 +88,7 @@ export async function acquireSingleInstance(options: AcquireSingleInstanceOption
           cwd: options.cwd ?? process.cwd(),
           pid: process.pid,
           receivedAt: new Date().toISOString(),
-        })
+        }, options.responseTimeoutMs)
         if (forwarded) return forwarded
       }
       await Bun.sleep(50)
@@ -195,7 +197,11 @@ async function readInstanceRecord(path: string): Promise<InstanceRecord | null> 
   }
 }
 
-async function forwardLaunch(record: InstanceRecord, event: SecondInstanceEvent): Promise<ForwardedInstance | null> {
+async function forwardLaunch(
+  record: InstanceRecord,
+  event: SecondInstanceEvent,
+  responseTimeoutMs = 1_500,
+): Promise<ForwardedInstance | null> {
   try {
     const response = await fetch(`http://127.0.0.1:${record.port}/second-instance`, {
       method: 'POST',
@@ -204,7 +210,7 @@ async function forwardLaunch(record: InstanceRecord, event: SecondInstanceEvent)
         'content-type': 'application/json',
       },
       body: JSON.stringify(event),
-      signal: AbortSignal.timeout(1_500),
+      signal: AbortSignal.timeout(responseTimeoutMs),
     })
     if (response.status === 401 || response.status === 404) return null
     const payload = await response.json().catch(() => null) as { accepted?: boolean; result?: unknown } | null

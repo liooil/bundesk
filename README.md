@@ -169,6 +169,9 @@ my-app status                  show desktop integration status
 my-app install-service         register as an auto-start service (headless serve)
 my-app uninstall-service       remove the service registration
 my-app service-status          show service status
+my-app install-pwa             open the install URL and wait for browser confirmation
+my-app install-pwa --policy    force-install through Edge/Chrome enterprise policy
+my-app remove-pwa-policy       remove only this app's force-install policy entry
 my-app upgrade [--force]       check for, install and restart after an upgrade
 ```
 
@@ -561,21 +564,30 @@ Known trade-offs:
 - by default the toast shows "Windows PowerShell" as the source name; after configuring `{ aumid }` and creating a Start Menu shortcut with that AUMID, toasts appear under your app's name;
 - click callbacks need toast activation (launch arguments + foreground activation), on the roadmap.
 
-## Installed PWA windows
+## PWA installation and windows
 
-The `pwa` provider launches an already-installed Edge/Chrome/Brave/Chromium
-web app by its Chromium app id:
+The `pwa` provider launches an Edge/Chrome/Brave/Chromium web app by its
+Chromium app id. BunDesk can also assist the initial installation:
 
 ```ts
 const app = createDesktopApp({
   id: 'my-company.my-app',
-  // The installed PWA start URL must point at this stable origin.
+  // A PWA needs a stable origin. Do not use a dynamic port here.
   server: { port: 43123, routes: { '/': page } },
   window: {
     provider: 'pwa',
+    exitWithWindow: false,
+    preferred: 'edge',
     pwa: {
       appId: 'abcdefghijklmnopabcdefghijklmnop',
       profileDirectory: 'Default',
+      // Defaults to the running app URL. Use this for an externally hosted PWA.
+      // installUrl: 'https://app.example.com/',
+      installTimeoutMs: 300_000,
+      policy: {
+        createDesktopShortcut: true,
+        customName: 'My App',
+      },
       // Optional for known browsers; this is the browser user-data root,
       // not the individual profile directory.
       // userDataDir: 'C:/Users/me/AppData/Local/Microsoft/Edge/User Data',
@@ -584,27 +596,74 @@ const app = createDesktopApp({
 })
 ```
 
-- BunDesk launches Chromium with `--app-id`, `--user-data-dir`, and
+### Interactive installation
+
+```bash
+my-app install-pwa
+```
+
+BunDesk starts the configured server, opens the install URL in the selected
+browser profile, and waits for the user to accept the browser's native install
+prompt. Installation completion is detected from the profile filesystem; the
+command does not poll with a fixed sleep and returns immediately if the PWA is
+already installed. If another app instance owns the server, the command is
+forwarded to that primary instance and its result is returned.
+
+### Enterprise policy installation
+
+```bash
+my-app install-pwa --policy
+my-app install-pwa --policy --dry-run
+my-app remove-pwa-policy
+```
+
+On Windows, policy mode merges this URL into the current user's mandatory
+`WebAppInstallForceList` registry policy for Microsoft Edge or Google Chrome.
+It preserves unrelated entries, asks the browser to refresh the selected
+profile, and waits until the configured `appId` appears. Because this is a
+mandatory policy, affected users cannot uninstall the PWA while the entry
+remains active.
+
+If a machine-level `WebAppInstallForceList` already contains this URL, BunDesk
+uses it without adding a user policy. If the machine policy contains a
+different list, BunDesk refuses to shadow it and directs deployment back to
+the administrator.
+
+`remove-pwa-policy` removes only the matching URL and preserves other
+current-user entries. It refuses to remove a machine-enforced entry. Removing
+the requirement does not uninstall an existing PWA. Automatic policy mutation is deliberately
+Windows-only. Chrome supports the same policy on Linux and macOS, and Edge
+supports it on macOS, but those systems require administrator-managed policy
+files or configuration profiles; BunDesk does not attempt privilege elevation.
+
+See the official
+[Microsoft Edge `WebAppInstallForceList` policy](https://learn.microsoft.com/en-us/deployedge/microsoft-edge-policies/webappinstallforcelist)
+and [Google Chrome policy list](https://chromeenterprise.google/policies/#WebAppInstallForceList).
+
+### Launch behavior and constraints
+
+- BunDesk launches an installed app with `--app-id`, `--user-data-dir`, and
   `--profile-directory`; it does not fall back to URL App Mode.
-- The PWA must already be installed in that browser profile. BunDesk validates
-  its `Web Applications/Manifest Resources/<appId>` directory before launch
-  and reports a missing installation instead of silently opening a tab.
-- Installation, the web app manifest, service worker, icons, scope, and
-  `start_url` belong to the application. BunDesk does not mutate browser policy
-  or profile databases to install ordinary PWAs.
+- Installation is confirmed by
+  `Web Applications/Manifest Resources/<appId>`. A mismatched configured
+  `appId` causes installation to time out with an explicit error.
+- The application still owns its Web App Manifest, Service Worker, icons,
+  scope, and `start_url`.
 - Use a fixed server origin. The installed PWA launches its manifest
-  `start_url`; `window.path` and a newly selected dynamic port cannot retarget
+  `start_url`; `window.path` or a newly selected dynamic port cannot retarget
   an installed app.
 - `userDataDir` is inferred for standard Edge, Chrome, Brave, and Chromium
   installations on Windows, Linux, and macOS. Set it explicitly for portable
   or nonstandard browsers.
-- A shared browser profile may hand the request to an already-running browser,
-  so the returned subprocess tracks the launcher rather than the actual PWA
-  window. Use `exitWithWindow: false` when the BunDesk backend must remain
-  alive independently of that launcher.
+- A shared browser profile may hand a launch request to an already-running
+  browser. The returned subprocess then tracks the launcher, not the PWA
+  window; use `exitWithWindow: false` so the backend remains alive.
+- Interactive installation and launching support Edge, Chrome, Brave, and
+  Chromium. Automated policy installation supports Edge and Chrome on Windows.
+  Firefox and Termux are not supported.
 
-CLI `--pwa` (or `--provider pwa`) selects this configured provider. Firefox and
-Termux are not supported.
+CLI `--pwa` (or `--provider pwa`) selects the installed-PWA window provider;
+it does not run the installation command.
 
 ## WebView2 windows (Windows)
 

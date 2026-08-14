@@ -392,6 +392,7 @@ function digest(bytes: ArrayBuffer): string {
 export * from './runtime/app'
 export * from './runtime/environment'
 export * from './runtime/browser'
+export * from './runtime/pwa-installation'
 export * from './runtime/linux-integration'
 export * from './runtime/notifications'
 export * from './runtime/paths'

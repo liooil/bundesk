@@ -12,7 +12,10 @@ import {
   getLinuxIntegrationStatus,
   installService,
   launchAppWindow,
+  createPwaInstallPolicyEntry,
+  installPwaInteractively,
   launchPwaWindow,
+  mergePwaInstallPolicy,
   registerLinuxIntegration,
   registerWindowsIntegration,
   resolveCliWindowProvider,
@@ -122,6 +125,90 @@ describe('desktop runtime', () => {
     })
     await expect(invalid.start(['--provider', 'native'])).rejects.toThrow('expected browser, pwa, or webview')
     await expect(invalid.start(['--provider'])).rejects.toThrow('requires browser, pwa, or webview')
+  })
+  it('routes install-pwa through the configured application lifecycle', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'bundesk-pwa-command-'))
+    temporaryDirectories.push(userDataDir)
+    const appId = 'abcdefghijklmnopabcdefghijklmnop'
+    await mkdir(join(
+      userDataDir,
+      'Default',
+      'Web Applications',
+      'Manifest Resources',
+      appId,
+    ), { recursive: true })
+    const app = createDesktopApp({
+      id: `runtime-pwa-install-command-${process.pid}`,
+      server: { port: 0, stickyPort: false, fetch: () => new Response('installable') },
+      window: {
+        provider: 'pwa',
+        preferred: process.execPath,
+        pwa: {
+          appId,
+          userDataDir,
+          installUrl: 'https://app.example/',
+        },
+      },
+      singleInstance: false,
+    })
+    const help = await app.start(['--help'])
+    expect(help.kind === 'command' && help.result).toContain('install-pwa [--policy]')
+
+    const installed = await app.start(['install-pwa'])
+    expect(installed).toEqual({
+      kind: 'command',
+      command: 'install-pwa',
+      result: expect.objectContaining({
+        mode: 'interactive',
+        status: 'already-installed',
+        appId,
+        url: 'https://app.example/',
+      }),
+    })
+  })
+
+
+  it('forwards install-pwa to the primary server instance and returns its result', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'bundesk-pwa-command-forward-'))
+    temporaryDirectories.push(directory)
+    const appId = 'abcdefghijklmnopabcdefghijklmnop'
+    await mkdir(join(
+      directory,
+      'browser',
+      'Default',
+      'Web Applications',
+      'Manifest Resources',
+      appId,
+    ), { recursive: true })
+    const app = createDesktopApp({
+      id: `runtime-pwa-install-forward-${process.pid}`,
+      server: { port: 0, stickyPort: false, fetch: () => new Response('installable') },
+      window: {
+        provider: 'browser',
+        preferred: process.execPath,
+        pwa: {
+          appId,
+          userDataDir: join(directory, 'browser'),
+          installUrl: 'https://app.example/',
+        },
+      },
+      singleInstance: { dataDirectory: join(directory, 'instance') },
+    })
+    const primary = await app.start(['serve'])
+    expect(primary.kind).toBe('primary')
+    if (primary.kind !== 'primary') throw new Error('Expected a primary session')
+
+    const secondary = await app.start(['install-pwa'])
+    expect(secondary).toEqual(expect.objectContaining({
+      kind: 'secondary',
+      accepted: true,
+      result: expect.objectContaining({
+        mode: 'interactive',
+        status: 'already-installed',
+        appId,
+      }),
+    }))
+    await primary.stop()
   })
 
   it('owns the Bun HTTP server lifecycle', async () => {
@@ -394,6 +481,73 @@ describe('desktop runtime', () => {
       '--new-window',
       'http://127.0.0.1:43210/example',
       '--test-argument',
+    ])
+  })
+
+  it('merges one PWA enterprise policy entry without replacing unrelated policy', () => {
+    const existing = [
+      { url: 'https://existing.example/', default_launch_container: 'tab' },
+      { url: 'https://app.example/', default_launch_container: 'tab' },
+    ]
+    const entry = createPwaInstallPolicyEntry('https://app.example', {
+      createDesktopShortcut: true,
+      customName: 'Example App',
+    })
+    const added = mergePwaInstallPolicy(existing, entry, 'add')
+    expect(added).toEqual({
+      changed: true,
+      entries: [
+        existing[0],
+        {
+          url: 'https://app.example/',
+          default_launch_container: 'window',
+          create_desktop_shortcut: true,
+          custom_name: 'Example App',
+        },
+      ],
+    })
+    expect(mergePwaInstallPolicy(added.entries, entry, 'add').changed).toBe(false)
+    expect(mergePwaInstallPolicy(added.entries, entry, 'remove')).toEqual({
+      changed: true,
+      entries: [existing[0]],
+    })
+  })
+
+  it.skipIf(process.platform === 'win32')('detects an interactive PWA installation from the browser profile event', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'bundesk-pwa-interactive-'))
+    temporaryDirectories.push(directory)
+    const executable = join(directory, 'chromium')
+    const argsFile = join(directory, 'args.txt')
+    const userDataDir = join(directory, 'user-data')
+    const appId = 'abcdefghijklmnopabcdefghijklmnop'
+    const manifestResources = join(
+      userDataDir,
+      'Default',
+      'Web Applications',
+      'Manifest Resources',
+      appId,
+    )
+    await writeFile(executable, [
+      '#!/usr/bin/env bun',
+      "import { mkdir } from 'node:fs/promises'",
+      `await mkdir(${JSON.stringify(manifestResources)}, { recursive: true })`,
+      `await Bun.write(${JSON.stringify(argsFile)}, Bun.argv.slice(2).join('\\n'))`,
+    ].join('\n'))
+    await chmod(executable, 0o755)
+
+    const result = await installPwaInteractively({
+      appId,
+      url: 'https://app.example/install',
+      userDataDir,
+      preferred: executable,
+      inheritOutput: false,
+    })
+    expect(result.status).toBe('installed')
+    expect((await readFile(argsFile, 'utf8')).split('\n')).toEqual([
+      `--user-data-dir=${userDataDir}`,
+      '--profile-directory=Default',
+      '--new-window',
+      'https://app.example/install',
     ])
   })
 

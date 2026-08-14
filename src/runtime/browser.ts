@@ -227,11 +227,17 @@ export async function launchAppWindow(options: AppWindowOptions): Promise<Bun.Su
   return null
 }
 
-/**
- * Launch an already-installed Chromium PWA by its app id. BunDesk deliberately
- * does not modify browser policy or profile databases to install web apps.
- */
-export async function launchPwaWindow(options: PwaWindowOptions): Promise<Bun.Subprocess> {
+export interface ResolvedPwaTarget {
+  browser: string
+  appId: string
+  profileDirectory: string
+  userDataDir: string
+  manifestResources: string
+}
+
+export async function resolvePwaTarget(
+  options: FindBrowserOptions & InstalledPwaOptions,
+): Promise<ResolvedPwaTarget> {
   if (isTermux()) throw new Error('The PWA window provider is not available on Termux')
   if (!/^[a-p]{32}$/.test(options.appId)) {
     throw new Error('PWA appId must be 32 lowercase characters in the a-p alphabet')
@@ -256,28 +262,44 @@ export async function launchPwaWindow(options: PwaWindowOptions): Promise<Bun.Su
   if (!userDataDir) {
     throw new Error(`Cannot infer the user-data directory for ${browser}; set window.pwa.userDataDir`)
   }
-
-  const manifestResources = join(
-    userDataDir,
+  return {
+    browser,
+    appId: options.appId,
     profileDirectory,
-    'Web Applications',
-    'Manifest Resources',
-    options.appId,
-  )
-  const installed = await stat(manifestResources).then((value) => value.isDirectory()).catch(() => false)
-  if (!installed) {
+    userDataDir,
+    manifestResources: join(
+      userDataDir,
+      profileDirectory,
+      'Web Applications',
+      'Manifest Resources',
+      options.appId,
+    ),
+  }
+}
+
+export async function isPwaInstalled(target: ResolvedPwaTarget): Promise<boolean> {
+  return stat(target.manifestResources).then((value) => value.isDirectory()).catch(() => false)
+}
+
+/**
+ * Launch an already-installed Chromium PWA by its app id.
+ */
+export async function launchPwaWindow(options: PwaWindowOptions): Promise<Bun.Subprocess> {
+  const target = await resolvePwaTarget(options)
+  if (!await isPwaInstalled(target)) {
     throw new Error(
-      `PWA ${options.appId} is not installed in browser profile ${profileDirectory}: ${manifestResources}`,
+      `PWA ${target.appId} is not installed in browser profile ${target.profileDirectory}: ` +
+      target.manifestResources,
     )
   }
 
   const output = options.inheritOutput === false ? 'ignore' : 'inherit'
-  console.info(`[BunDesk] Opening installed PWA ${options.appId}: ${browser}`)
+  console.info(`[BunDesk] Opening installed PWA ${target.appId}: ${target.browser}`)
   return Bun.spawn([
-    browser,
-    `--app-id=${options.appId}`,
-    `--user-data-dir=${userDataDir}`,
-    `--profile-directory=${profileDirectory}`,
+    target.browser,
+    `--app-id=${target.appId}`,
+    `--user-data-dir=${target.userDataDir}`,
+    `--profile-directory=${target.profileDirectory}`,
     ...(options.browserArgs ?? []),
   ], {
     stdio: ['ignore', output, output],

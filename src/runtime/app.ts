@@ -4,8 +4,10 @@ import type { UpdateCheckResult, Updater, UpdaterOptions } from './updater'
 import type { WindowsIntegrationOptions, WindowsIntegrationResult, WindowsIntegrationStatus } from './windows-integration'
 import type { LinuxIntegrationOptions } from './linux-integration'
 import type { WebViewWindow } from './webview2'
+import type { PwaPolicyOptions } from './pwa-installation'
 import { join } from 'node:path'
 import { launchAppWindow, launchPwaWindow } from './browser'
+import { installPwaInteractively, installPwaWithPolicy, removePwaInstallationPolicy } from './pwa-installation'
 import { getAppDataDirectory } from './paths'
 import { readStickyPort, writeStickyPort, type StickyPortOptions } from './sticky-port'
 import { isBunHotMode, replaceHotRun } from './hot-reload'
@@ -32,6 +34,15 @@ import {
 export type DesktopIntegrationOptions = WindowsIntegrationOptions
 
 export type DesktopAppWindow = Bun.Subprocess | WebViewWindow
+export interface DesktopPwaOptions extends InstalledPwaOptions {
+  /** URL presented to the browser for installation; defaults to the running app URL. */
+  installUrl?: string | URL
+  /** Maximum time to wait for the browser to install the app. Defaults to five minutes. */
+  installTimeoutMs?: number
+  /** WebAppInstallForceList values used by `install-pwa --policy`. */
+  policy?: PwaPolicyOptions
+}
+
 
 export interface DesktopWindowOptions extends Omit<AppWindowOptions, 'appId' | 'url'> {
   path?: string
@@ -39,7 +50,7 @@ export interface DesktopWindowOptions extends Omit<AppWindowOptions, 'appId' | '
   /** Browser App Mode (default), an installed Chromium PWA, Windows WebView2, or Linux WebKitGTK. */
   provider?: 'browser' | 'pwa' | 'webview' | 'webkit'
   /** Required by `provider: 'pwa'`; identifies the installed app and browser profile. */
-  pwa?: InstalledPwaOptions
+  pwa?: DesktopPwaOptions
   /** In-process providers ('webview'/'webkit'): initial window size and title. */
   width?: number
   height?: number
@@ -133,20 +144,21 @@ export type DesktopAppStartResult<WebSocketData = undefined> =
   | SingleInstanceResult & { kind: 'secondary' }
   | {
     kind: 'command'
-    command: 'help' | 'version' | 'register' | 'unregister' | 'status' | 'upgrade' | 'install-service' | 'uninstall-service' | 'service-status'
+    command: 'help' | 'version' | 'register' | 'unregister' | 'status' | 'upgrade' | 'install-service' | 'uninstall-service' | 'service-status' | 'install-pwa' | 'remove-pwa-policy'
     result: unknown
   }
   | { kind: 'updated'; update: UpdateCheckResult }
 
 interface ParsedRuntimeArgs {
   appArgs: string[]
-  command?: 'serve' | 'register' | 'unregister' | 'status' | 'upgrade' | 'install-service' | 'uninstall-service' | 'service-status'
+  command?: 'serve' | 'register' | 'unregister' | 'status' | 'upgrade' | 'install-service' | 'uninstall-service' | 'service-status' | 'install-pwa' | 'remove-pwa-policy'
   browser: boolean
   windowProvider?: CliWindowProvider
   host?: string
   port?: number
   dryRun: boolean
   makeDefault: boolean
+  policy: boolean
   force: boolean
   afterUpdate: boolean
   waitForPid?: number
@@ -206,6 +218,9 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
         }
         return
       }
+      if (event.argv[0] === 'install-pwa' || event.argv[0] === 'remove-pwa-policy') {
+        return this.runPwaCommand(context.url, parseRuntimeArgs(event.argv))
+      }
       return this.options.onSecondInstance?.(event, context)
     }
 
@@ -215,9 +230,14 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
         appId: this.options.id,
         dataDirectory: this.options.singleInstance?.dataDirectory,
         timeoutMs: this.options.singleInstance?.timeoutMs,
-        argv: parsed.command === 'upgrade'
-          ? ['upgrade', ...(parsed.force ? ['--force'] : []), ...parsed.appArgs]
-          : parsed.appArgs,
+        argv: isPwaCommand(parsed.command)
+          ? [parsed.command!, ...(parsed.policy ? ['--policy'] : []), ...(parsed.dryRun ? ['--dry-run'] : [])]
+          : parsed.command === 'upgrade'
+            ? ['upgrade', ...(parsed.force ? ['--force'] : []), ...parsed.appArgs]
+            : parsed.appArgs,
+        responseTimeoutMs: isPwaCommand(parsed.command)
+          ? ((typeof this.options.window === 'object' ? this.options.window.pwa?.installTimeoutMs : undefined) ?? 5 * 60_000) + 5_000
+          : undefined,
         cwd: process.cwd(),
         onSecondInstance,
       })
@@ -392,6 +412,15 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       wait,
     }
     contextResolve?.(context)
+    if (isPwaCommand(parsed.command)) {
+      try {
+        const result = await this.runPwaCommand(appUrl, parsed)
+        return { kind: 'command', command: parsed.command, result }
+      } finally {
+        await stop()
+      }
+    }
+
 
 
     if (this.options.tray) {
@@ -454,10 +483,38 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
     return result
   }
 
+  private async runPwaCommand(url: URL, parsed: ParsedRuntimeArgs) {
+    const window = this.options.window
+    if (!window || !window.pwa) {
+      throw new Error(`${parsed.command} requires window.pwa configuration`)
+    }
+    const options = {
+      ...window.pwa,
+      url: window.pwa.installUrl ?? url,
+      timeoutMs: window.pwa.installTimeoutMs,
+      preferred: window.preferred,
+      candidates: window.candidates,
+      browserArgs: window.browserArgs,
+      inheritOutput: window.inheritOutput,
+    }
+    if (parsed.command === 'remove-pwa-policy') {
+      return removePwaInstallationPolicy({ ...options, dryRun: parsed.dryRun })
+    }
+    if (parsed.policy) {
+      return installPwaWithPolicy({
+        ...options,
+        policy: window.pwa.policy,
+        dryRun: parsed.dryRun,
+      })
+    }
+    if (parsed.dryRun) throw new Error('install-pwa --dry-run requires --policy')
+    return installPwaInteractively(options)
+  }
+
   private async runIntegrationCommand(
     parsed: ParsedRuntimeArgs,
   ): Promise<DesktopAppStartResult<WebSocketData> | null> {
-    if (!parsed.command || parsed.command === 'serve' || parsed.command === 'upgrade') return null
+    if (!parsed.command || parsed.command === 'serve' || parsed.command === 'upgrade' || isPwaCommand(parsed.command)) return null
 
     if (parsed.command === 'install-service' || parsed.command === 'uninstall-service' || parsed.command === 'service-status') {
       const serviceOptions = { appId: this.options.id }
@@ -507,6 +564,12 @@ function renderCliHelp<WebSocketData, Routes extends string>(
     'Commands:',
     '  serve                         Run the HTTP server without opening a window',
   ]
+  if (options.window && options.window.pwa) {
+    lines.push(
+      '  install-pwa [--policy]        Install the configured PWA interactively or by policy',
+      '  remove-pwa-policy             Remove its enterprise force-install policy entry',
+    )
+  }
 
   if (options.desktopIntegration) {
     lines.push(
@@ -536,7 +599,7 @@ function renderCliHelp<WebSocketData, Routes extends string>(
     '  -H, --host <hostname>        Override the server hostname',
     '  -p, --port <port>            Override the server port (0-65535)',
     '      --mode <mode>            Set development or production mode',
-    '      --dry-run                Preview integration/service changes',
+    '      --dry-run                Preview integration, service, or PWA policy changes',
   )
   for (const option of options.cli?.options ?? []) {
     lines.push(`  ${option.flags.padEnd(30)}${option.description}`)
@@ -593,11 +656,12 @@ function parseRuntimeArgs(args: string[]): ParsedRuntimeArgs {
     dryRun: false,
     makeDefault: false,
     force: false,
+    policy: false,
     afterUpdate: false,
   }
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!
-    if (index === 0 && ['serve', 'register', 'unregister', 'status', 'upgrade', 'install-service', 'uninstall-service', 'service-status'].includes(arg)) {
+    if (index === 0 && ['serve', 'register', 'unregister', 'status', 'upgrade', 'install-service', 'uninstall-service', 'service-status', 'install-pwa', 'remove-pwa-policy'].includes(arg)) {
       parsed.command = arg as ParsedRuntimeArgs['command']
     } else if (arg === '--browser') {
       parsed.browser = true
@@ -618,6 +682,8 @@ function parseRuntimeArgs(args: string[]): ParsedRuntimeArgs {
       parsed.browser = false
     } else if (arg === '--dry-run') {
       parsed.dryRun = true
+    } else if (arg === '--policy') {
+      parsed.policy = true
     } else if (arg === '--default') {
       parsed.makeDefault = true
     } else if (arg === '--force') {
@@ -640,6 +706,10 @@ function parseRuntimeArgs(args: string[]): ParsedRuntimeArgs {
     }
   }
   return parsed
+}
+
+function isPwaCommand(command: ParsedRuntimeArgs['command']): command is 'install-pwa' | 'remove-pwa-policy' {
+  return command === 'install-pwa' || command === 'remove-pwa-policy'
 }
 
 function parseCliWindowProvider(value: string | undefined, flag: string): CliWindowProvider {
