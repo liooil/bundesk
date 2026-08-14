@@ -8,8 +8,8 @@ interface AppInfo {
   provider: string
 }
 
-// The in-process providers ('webview'/'webkit') inject window.chrome.webview;
-// the 'browser' provider has no bridge, so the page degrades gracefully.
+// The concrete in-process providers (webview2/webkitgtk) inject the bridge;
+// browser-process and external providers do not, so the page degrades gracefully.
 const bridge = (window as { chrome?: { webview?: { postMessage(value: unknown): void } } }).chrome?.webview
 
 function setText(id: string, value: string): void {

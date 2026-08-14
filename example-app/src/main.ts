@@ -2,11 +2,17 @@
  * bundesk example app — showcases the framework's surface:
  *
  * - fullstack HTML page (HTML import route, HMR in dev, AOT in prod)
- * - window providers: 'webview' on Windows, 'webkit' on Linux, 'browser' elsewhere
+ * - app-owned concrete provider/fallback policy for each platform
  * - tray (Windows), notifications, single instance, desktop integration
  * - the resolved runtime environment (context.env) and `--smoke` for CI
  */
-import { createDesktopApp, type DesktopNotificationOptions } from '../../src/index'
+import {
+  createDesktopApp,
+  isTermux,
+  type DesktopNotificationOptions,
+  type DesktopWindowOptions,
+  type WindowProviderId,
+} from '../../src/index'
 import page from './page/index.html'
 
 declare const __EXAMPLE_APP_VERSION__: string
@@ -18,7 +24,9 @@ const VERSION = typeof __EXAMPLE_APP_VERSION__ === 'string' ? __EXAMPLE_APP_VERS
 // route notifications through a mutable holder instead.
 let notify: (options: DesktopNotificationOptions) => Promise<boolean> = () => Promise.resolve(false)
 let appContextEnv: 'development' | 'production' | undefined
-let appContextProvider: 'browser' | 'webview' | 'webkit' | undefined
+let appContextProvider: WindowProviderId | undefined
+
+const recommendedWindow = platformWindowProviders()
 
 const app = createDesktopApp({
   id: APP_ID,
@@ -42,12 +50,12 @@ const app = createDesktopApp({
     },
   },
   window: {
+    ...recommendedWindow,
     path: '/',
-    provider: providerName(),
     title: 'BunDesk Example App',
     width: 1100,
     height: 720,
-    exitWithWindow: true,
+    exitWithWindow: !isTermux(),
     onMessage: (message) => {
       if (message && typeof message === 'object' && 'type' in message && message.type === 'notify') {
         void notify({ title: 'BunDesk example', body: 'Notification delivered through context.notify' })
@@ -81,14 +89,40 @@ const app = createDesktopApp({
   },
 })
 
-function providerName(): 'webview' | 'webkit' | 'browser' {
-  return process.platform === 'win32' ? 'webview' : process.platform === 'linux' ? 'webkit' : 'browser'
+function platformWindowProviders(): Pick<DesktopWindowOptions, 'provider' | 'fallback'> {
+  if (isTermux()) return { provider: 'android-view-intent' }
+  if (process.platform === 'win32') {
+    return {
+      provider: 'webview2',
+      fallback: [
+        { provider: 'chromium-app', on: ['unsupported', 'unavailable'] },
+        { provider: 'firefox-window', on: ['unsupported', 'unavailable'] },
+      ],
+    }
+  }
+  if (process.platform === 'linux') {
+    return {
+      provider: 'webkitgtk',
+      fallback: [
+        { provider: 'chromium-app', on: ['unsupported', 'unavailable'] },
+        { provider: 'firefox-window', on: ['unsupported', 'unavailable'] },
+      ],
+    }
+  }
+  return {
+    provider: 'chromium-app',
+    fallback: [{ provider: 'firefox-window', on: ['unsupported', 'unavailable'] }],
+  }
+}
+
+function providerName(): WindowProviderId {
+  return recommendedWindow.provider
 }
 
 if (Bun.argv.slice(2).includes('--smoke')) {
   // Headless CI check: server only, no window. Exercises the same code path
   // as a real run without needing a display.
-  const result = await app.start(['--no-browser'])
+  const result = await app.start(['--no-window'])
   if (result.kind === 'primary') {
     const info = await fetch(new URL('/api/info', result.url)).then((response) => response.json()) as { id: string }
     console.log(`[smoke] server ok: ${result.url.href} id=${info.id} env=${result.env}`)

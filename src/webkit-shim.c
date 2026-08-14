@@ -6,8 +6,8 @@
  * wk_init, so the only runtime requirement is the WebKit2GTK stack installed
  * on the system: libwebkit2gtk-4.1.so.0 (or -4.0), libjavascriptcoregtk
  * (-4.1/-4.0), the matching libgtk and the GLib stack. If those are missing,
- * wk_init returns 0 (with a diagnostic code) and the app falls back to the
- * browser provider — the provider dispatch decides.
+ * wk_init returns 0 with a diagnostic code. Any fallback is explicitly
+ * configured by the application and executed outside this shim.
  *
  * GTK base detection: distros disagree about which GTK the 4.1 API is built
  * on — Arch's webkit2gtk-4.1 links GTK3 (pkg-config emits -lgtk-3), while

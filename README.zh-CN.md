@@ -25,7 +25,7 @@ BunDesk 将 Bun runtime、server 和由入口导入的前端资源编进同一�
 
 - server 代码直接由 Bun 运行，可使用现有 TypeScript 调试方式；
 - UI 使用浏览器自带 DevTools，不经过自定义调试桥；
-- `--no-browser` 可只启动 server，再用任意浏览器或 API 客户端调试；
+- `--no-window` 可只启动 server，再用任意浏览器或 API 客户端调试；
 - 应用 routes、Bun 插件、Vite/Tailwind 和 Worker 构建逻辑都留在应用仓库中。
 
 ### 支持交叉构建
@@ -54,7 +54,7 @@ BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要
 ## 核心功能
 
 - `createDesktopApp(...)` 一体化托管 server、窗口和生命周期；
-- `launchAppWindow(...)` 等组合式底层 API；
+- `openDesktopWindow(...)` 等组合式底层 API；
 - Edge/Chrome/Chromium `--app=<url>` 独立窗口（macOS 含 Brave），Termux 走 Android VIEW intent；
 - 带随机 256-bit token 的 loopback IPC 单实例；
 - 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调；
@@ -110,6 +110,7 @@ const app = createDesktopApp({
   },
 
   window: {
+    provider: 'chromium-app',
     path: '/',
     preferred: 'edge',
     exitWithWindow: true,
@@ -154,15 +155,13 @@ await app.run()
 框架保留以下应用命令：
 
 ```text
-my-app                         启动 server 和浏览器窗口
+my-app                         启动 server 和配置的具体窗口 provider
 my-app --help                  显示根据配置生成的帮助并退出
 my-app --version               显示应用名称和版本并退出
-my-app --browser               强制使用系统浏览器 provider
-my-app --pwa                   打开配置的已安装 Chromium PWA
-my-app --webview               强制使用当前平台的进程内 WebView
-my-app --provider pwa          显式选择 browser、pwa 或 webview
+my-app --provider webview2     显式固定一个具体 provider（禁用配置的 fallback）
+my-app --no-window             不打开窗口
 my-app <file>                  启动或把文件参数转发给主实例
-my-app serve --no-browser      只启动 HTTP server
+my-app serve --no-window       只启动 HTTP server
 my-app register [--default]    注册当前用户文件关联和 launcher
 my-app unregister              取消注册
 my-app status                  查看桌面集成状态
@@ -184,7 +183,7 @@ my-app upgrade [--force]       检查、安装升级并重启
 [`example-app/`](example-app/) 是可运行的功能展示应用,由 CI 流水线打包为各平台可执行文件(不随 npm 包发布)。它展示:
 
 - **全栈页面**(HTML import 路由——开发时热更新,编译产物 AOT)
-- **窗口 provider**:Windows 用 `webview`、Linux 用 `webkit`、其他平台 `browser`——运行时按 `process.platform` 选择
+- 应用自行定义的**窗口 provider 策略**：Windows 为 `webview2` → Chromium → Firefox，Linux 为 `webkitgtk` → Chromium → Firefox，macOS 为 Chromium → Firefox
 - **托盘**(Windows + Linux)、**通知**、**单实例**、**桌面集成**(`register` / `unregister` / `status`)、解析出的**运行环境**(`context.env`)
 - 供 CI 无头验证的 `--smoke` 服务模式（不开窗口）
 
@@ -208,7 +207,7 @@ import {
   createUpdater,
   findChromiumBrowser,
   findFirefoxBrowser,
-  launchAppWindow,
+  openDesktopWindow,
   registerWindowsIntegration,
   staticBinaryProvider,
 } from 'bundesk'
@@ -271,7 +270,7 @@ const app = createDesktopApp({
       '/api/data': () => Response.json({ ok: true }),
     },
   },
-  window: { provider: 'webview' },
+  window: { provider: 'chromium-app' },
 })
 ```
 
@@ -438,7 +437,7 @@ my-app uninstall-service      # 停止并移除
 
 约定：
 
-- 服务以 `"<exe>" serve --no-browser` 运行，注册时固化可执行文件路径；框架的原子自升级在同一路径替换文件，服务无需重新注册；
+- 服务以 `"<exe>" serve --no-window` 运行，注册时固化可执行文件路径；框架的原子自升级在同一路径替换文件，服务无需重新注册；
 - `service-status` 的 `active` 字段通过单实例记录（`instance.json` + PID 存活）判断，跨平台一致；
 - `install-service` / `uninstall-service` 支持 `--dry-run` 预览；
 - 服务使用 `WorkingDirectory`/`RunAtLoad`/`Restart=on-failure`/`KeepAlive` 保证崩溃拉起，应用内的相对路径应基于 `process.execPath` 解析而非 cwd。
@@ -510,8 +509,8 @@ await context.notify({
 
 ## PWA 安装与窗口
 
-`pwa` provider 通过 Chromium app id 启动 Edge/Chrome/Brave/Chromium Web
-App；BunDesk 也可以辅助完成首次安装：
+具体 `chromium-pwa` provider 通过 Chromium app id 启动
+Edge/Chrome/Brave/Chromium Web App；BunDesk 也可以辅助完成首次安装：
 
 ```ts
 const app = createDesktopApp({
@@ -519,7 +518,7 @@ const app = createDesktopApp({
   // PWA 必须使用稳定 origin，不能在这里使用动态端口。
   server: { port: 43123, routes: { '/': page } },
   window: {
-    provider: 'pwa',
+    provider: 'chromium-pwa',
     exitWithWindow: false,
     preferred: 'edge',
     pwa: {
@@ -592,48 +591,89 @@ macOS、Edge 在 macOS 也支持同一策略，但这些系统要求管理员部
 - 交互安装和启动支持 Edge、Chrome、Brave、Chromium；自动策略安装只支持 Windows
   上的 Edge 和 Chrome。Firefox 与 Termux 不支持。
 
-CLI `--pwa`（或 `--provider pwa`）只选择已安装 PWA 窗口 provider，不会执行安装命令。
+CLI `--provider chromium-pwa` 固定已安装 PWA 窗口 provider；它不会执行安装命令，也不会选择其他 provider。
 
-## WebView2 窗口（Windows）
+## 具体窗口 provider 与显式 fallback
 
-除了用系统浏览器打开 App Mode 窗口外，窗口也可以由 WebView2 进程内托管（使用系统 WebView2 Runtime / Edge 统一运行时，不捆绑任何东西）：
+BunDesk 不会把平台映射成 provider，不会追加隐式 fallback，也没有默认 provider。
+省略 `window` 就不会打开窗口。应用直接指定一个具体实现：
 
 ```ts
 const app = createDesktopApp({
   id: 'my-company.my-app',
   server: {
     port: 0,
-    routes: { '/': new Response('<h1>Hello</h1>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
+    routes: {
+      '/': new Response('<h1>Hello</h1>', {
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      }),
+    },
   },
   window: {
-    provider: 'webview',          // 'browser'（默认）、'pwa' 或 'webview'
+    provider: 'webview2',
+    fallback: [
+      { provider: 'chromium-app', on: ['unsupported', 'unavailable'] },
+      { provider: 'firefox-window', on: ['unsupported', 'unavailable'] },
+    ],
     path: '/',
     width: 900,
     height: 640,
     title: 'My App',
     onMessage: (message) => console.log('page says:', message),
-    onNavigateCompleted: ({ success, errorStatus }) => console.log('navigated:', success, errorStatus),
   },
 })
 ```
 
-- 页面通过 `window.chrome.webview.postMessage` 与应用通信（消息到达 `onMessage`）；窗口句柄（`context.window`）在 `Bun.Subprocess` 表面之上额外提供 `executeScript`、`postMessage` 与 `navigate`。
-- WebView2 用户数据目录默认为 `<appData>/WebView2`。
-- 实现：无头文件 C shim（COM vtable 布局对照官方 WebView2.h 校验）由 Bun 内嵌 TinyCC 运行时编译。刻意不使用官方 WebView2Loader.dll：shim 从 EdgeUpdate 注册表键读取运行时安装路径，直接调用 `EmbeddedBrowserWebView.dll` 的 `CreateWebViewEnvironmentWithOptionsInternal` 导出。该导出非文档化但事实上 ABI 稳定——它正是官方 loader 自身依赖的同一导出（loader 的环境创建路径就是 GetProcAddress 此导出加一次直调），冻结的二进制无论内嵌 loader 还是本 shim，失败方式完全相同——无原生工具链、无下载二进制，单二进制构建保留。
-- 应用提供的页面必须设置真实的 `content-type`（`text/html`）；否则页面按纯文本渲染。
+primary provider、fallback provider、顺序及允许 fallback 的失败类别都由应用决定。
+未配置 `fallback` 时，provider 失败即为最终结果。`--provider <id>` 显式固定
+一个 provider 并禁用配置的 fallback；`--no-window` 不打开窗口。
 
-各平台窗口 provider（`provider: 'browser'` 为默认，全平台可用；优先使用 Chromium App Mode，未找到时回退到隔离的 Firefox 窗口）：
+可用的具体 ID：
 
-CLI 可用 `--browser` / `--pwa` / `--webview`（或 `--provider browser|pwa|webview`）覆盖配置。CLI 的 `webview` 是跨平台抽象：Windows 映射为 `webview`，Linux 映射为 `webkit`；不支持进程内 WebView 的平台会直接报错。`--no-browser` 仍表示不打开任何窗口。配置文件中的 `window.provider` 使用下表的原始 provider 名称。
+| Provider | 机制 | 能否观察真实窗口关闭 |
+| --- | --- | --- |
+| `webview2` | Windows 进程内 WebView2 | 能 |
+| `webkitgtk` | Linux 进程内 WebKitGTK | 能 |
+| `chromium-app` | 隔离 Chromium `--app=<url>` 进程 | 能，针对受管进程 |
+| `chromium-pwa` | 已安装 Chromium app id | 不能；进程可能只是 launcher |
+| `firefox-window` | 隔离 Firefox profile/window 进程 | 能，针对受管进程 |
+| `system-browser` | 系统 URL opener | 不能 |
+| `android-view-intent` | Termux Android VIEW intent | 不能；进程只是 dispatcher |
 
-| 平台 | 进程内 provider | 状态 | 机制 |
+`webview2` 和 `webkitgtk` 提供 `navigate`、`executeScript`、`postMessage`、
+导航就绪和 page-to-host 消息。页面必须返回真实
+`content-type: text/html`。`webview2` 使用系统 WebView2 Runtime，由 Bun 内嵌
+TinyCC 编译无头文件 C shim；它刻意绕过 `WebView2Loader.dll`，发现 Edge 统一
+runtime 后直调未文档化的 `CreateWebViewEnvironmentWithOptionsInternal`。
+`webkitgtk` 需要 WebKit2GTK 4.1 栈和桌面 display。
+
+返回的 `DesktopWindowHandle` 由 `provider` 和 `kind` 判别，提供 `ready`、
+`closed`、`lifecycle`、`capabilities`、`close()` 和完整 `attempts` 轨迹。
+嵌入式 handle 额外提供脚本、消息和导航方法。`ready` 记录真实证据：
+`navigation-completed`、`process-started` 或 `launch-dispatched`。
+
+只读取事实而不触发框架选择：
+
+```ts
+const report = await inspectWindowProvider('webview2')
+const releaseEvidence = getWindowProviderMatrix()
+```
+
+`report` 分开报告 target 兼容性、当前机器可用性、release 验证状态、能力和结构化
+诊断。release 矩阵只是证据；两个 API 都不会选择或替换 provider。
+
+当前嵌入式 provider 证据：
+
+| Provider | Target | 实现 | 验证 |
 | --- | --- | --- | --- |
-| Windows | `webview`（WebView2） | **已实现** | 内嵌 TinyCC 编译的 C shim；直调运行时 `EmbeddedBrowserWebView.dll`（无 loader 二进制） |
-| Linux | `webkit`（WebKitGTK） | **已实现** | `webkit2gtk-4.1` C API shim，内嵌 TinyCC 编译（`run_javascript` → `executeScript`，`script-message-received` → `onMessage`）；GTK3/GTK4 两种 webkit 构建均支持（运行时探测底座）；需系统装有 WebKitGTK 栈（如 `pacman -S webkit2gtk-4.1` / `apt install libwebkit2gtk-4.1-0`）；Wayland 下默认禁用 DMA-BUF renderer 以兼容 GBM（启动前设 `WEBKIT_DISABLE_DMABUF_RENDERER=0` 可覆盖）；WSLg 下需设 `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1`（GPU 初始化失败时再加 `LIBGL_ALWAYS_SOFTWARE=1`） |
-| macOS | `wkwebview`（WKWebView） | 未实现 | `objc_msgSend` FFI shim；可行但最脆弱（ObjC block、NSApplication run loop） |
-| Termux | — | 不支持 | Android 无 shell 进程可用的 WebView API；嵌入式 WebView 需构建 APK。VIEW intent（`browser`）是既定路径 |
+| `webview2` | Windows x64 | 已实现 | 实验性；原生创建/导航/脚本/消息/关闭 smoke 已通过 |
+| `webview2` | Windows arm64 | 未实现 | 当前实现要求 runtime TinyCC；测试的 compiled Bun runtime 不提供 |
+| `webkitgtk` | Linux x64 | 已实现 | WSLg 原生创建/导航/脚本/消息/关闭 smoke 已通过 |
+| `webkitgtk` | Linux arm64 | 已实现 | 未验证 |
+| `wkwebview` | macOS | 未实现 | 不暴露 provider ID |
 
-非 Windows 平台在配置中设置 `window.provider = 'webview'` 会抛错；Linux 配置应使用 `webkit`，但 CLI 仍使用统一的 `--webview`。
+选择的 provider 无法观察真实窗口关闭时，`exitWithWindow: true` 会被拒绝。
+`chromium-pwa`、`system-browser` 和 `android-view-intent` 应设为 `false`。
 
 ## 自动升级
 

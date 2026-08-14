@@ -8,7 +8,7 @@ import { runRegistry } from './windows-integration'
 /**
  * Register a BunDesk app as an always-on headless service.
  *
- * The service runs `"<exe>" serve --no-browser`: the HTTP/API layer stays up
+ * The service runs `"<exe>" serve --no-window`: the HTTP/API layer stays up
  * without a window, and interactive launches forward to it through the
  * single-instance IPC and open a window onto the running server.
  *
@@ -44,7 +44,7 @@ export interface ServiceStatus {
   details: string[]
 }
 
-const serviceArgs = ['serve', '--no-browser']
+const serviceArgs = ['serve', '--no-window']
 
 function serviceCommandLine(executablePath: string): string {
   return `"${executablePath}" ${serviceArgs.join(' ')}`
@@ -77,7 +77,7 @@ export function renderLaunchdPlist(appId: string, executablePath: string, logDir
 <array>
 <string>${escapeXml(executablePath)}</string>
 <string>serve</string>
-<string>--no-browser</string>
+<string>--no-window</string>
 </array>
 <key>RunAtLoad</key><true/>
 <key>KeepAlive</key><true/>
@@ -90,7 +90,7 @@ export function renderLaunchdPlist(appId: string, executablePath: string, logDir
 }
 
 export function renderTermuxBootScript(executablePath: string): string {
-  return `#!/data/data/com.termux/files/usr/bin/sh\nexec "${executablePath}" serve --no-browser\n`
+  return `#!/data/data/com.termux/files/usr/bin/sh\nexec "${executablePath}" serve --no-window\n`
 }
 
 function escapeXml(value: string): string {

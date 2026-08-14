@@ -11,14 +11,18 @@ import {
   githubReleaseProvider,
   getLinuxIntegrationStatus,
   installService,
-  launchAppWindow,
+  launchChromiumAppWindow,
+  launchFirefoxWindow,
   createPwaInstallPolicyEntry,
   installPwaInteractively,
   launchPwaWindow,
+  getWindowProviderMatrix,
+  inspectWindowProvider,
+  openDesktopWindow,
+  WindowProviderError,
   mergePwaInstallPolicy,
   registerLinuxIntegration,
   registerWindowsIntegration,
-  resolveCliWindowProvider,
   renderLaunchdPlist,
   renderSystemdUnit,
   renderTermuxBootScript,
@@ -58,7 +62,7 @@ describe('desktop runtime', () => {
       expect(help.result).toContain('Usage: cli-test [command] [options]')
       expect(help.result).toContain('--smoke')
       expect(help.result).toContain('--provider <provider>')
-      expect(help.result).toContain('--pwa')
+      expect(help.result).toContain('webview2')
     }
 
     const shortHelp = await app.start(['-h'])
@@ -70,23 +74,18 @@ describe('desktop runtime', () => {
     expect(shortVersion).toEqual(version)
   })
 
-  it('selects browser or the platform-native webview from CLI options', async () => {
-    expect(resolveCliWindowProvider('browser', 'linux')).toBe('browser')
-    expect(resolveCliWindowProvider('webview', 'win32')).toBe('webview')
-    expect(resolveCliWindowProvider('webview', 'linux')).toBe('webkit')
-    expect(() => resolveCliWindowProvider('webview', 'darwin')).toThrow('not available')
-    expect(resolveCliWindowProvider('pwa', 'win32')).toBe('pwa')
-    expect(resolveCliWindowProvider('pwa', 'linux')).toBe('pwa')
-    expect(resolveCliWindowProvider('pwa', 'darwin')).toBe('pwa')
-
+  it('accepts only concrete provider names from CLI options', async () => {
     const profile = await mkdtemp(join(tmpdir(), 'bundesk-browser-cli-'))
     temporaryDirectories.push(profile)
-    for (const [index, args] of [['--browser'], ['--provider', 'browser'], ['--provider=browser']].entries()) {
+    for (const [index, args] of [
+      ['--provider', 'chromium-app'],
+      ['--provider=chromium-app'],
+    ].entries()) {
       const app = createDesktopApp({
         id: `runtime-browser-cli-${process.pid}-${index}`,
         server: { port: 0, stickyPort: false, fetch: () => new Response('ok') },
         window: {
-          provider: 'webview',
+          provider: 'webview2',
           preferred: process.execPath,
           userDataDir: join(profile, String(index)),
           inheritOutput: false,
@@ -96,7 +95,7 @@ describe('desktop runtime', () => {
       const session = await app.start(args)
       expect(session.kind).toBe('primary')
       if (session.kind !== 'primary') throw new Error('Expected a primary session')
-      expect(session.windowProvider).toBe('browser')
+      expect(session.windowProvider).toBe('chromium-app')
       expect(session.window).not.toBeNull()
       expect(session.window && 'executeScript' in session.window).toBe(false)
       await session.stop()
@@ -106,7 +105,7 @@ describe('desktop runtime', () => {
       id: `runtime-pwa-cli-${process.pid}`,
       server: { port: 0, stickyPort: false, fetch: () => new Response('unused') },
       window: {
-        provider: 'browser',
+        provider: 'chromium-app',
         preferred: process.execPath,
         pwa: {
           appId: 'abcdefghijklmnopabcdefghijklmnop',
@@ -115,7 +114,7 @@ describe('desktop runtime', () => {
       },
       singleInstance: false,
     })
-    await expect(pwa.start(['--pwa'])).rejects.toThrow('is not installed in browser profile Default')
+    await expect(pwa.start(['--provider', 'chromium-pwa'])).rejects.toThrow('chromium-pwa: unavailable')
 
     const invalid = createDesktopApp({
       id: `runtime-browser-cli-invalid-${process.pid}`,
@@ -123,8 +122,72 @@ describe('desktop runtime', () => {
       window: false,
       singleInstance: false,
     })
-    await expect(invalid.start(['--provider', 'native'])).rejects.toThrow('expected browser, pwa, or webview')
-    await expect(invalid.start(['--provider'])).rejects.toThrow('requires browser, pwa, or webview')
+    await expect(invalid.start(['--provider', 'native'])).rejects.toThrow('Invalid window provider')
+    await expect(invalid.start(['--provider'])).rejects.toThrow('requires one of')
+  })
+
+  it('opens no window when the application omits window configuration', async () => {
+    const app = createDesktopApp({
+      id: `runtime-no-default-provider-${process.pid}`,
+      server: { port: 0, stickyPort: false, fetch: () => new Response('ok') },
+      singleInstance: false,
+    })
+    const session = await app.start([])
+    if (session.kind !== 'primary') throw new Error('Expected a primary session')
+    expect(session.window).toBeNull()
+    expect(session.windowProvider).toBeNull()
+    await session.stop()
+  })
+
+  it('reports provider facts without selecting a replacement', async () => {
+    const matrix = getWindowProviderMatrix()
+    expect(matrix.some((entry) =>
+      entry.provider === 'webview2' &&
+      entry.platform === 'win32' &&
+      entry.arch === 'arm64' &&
+      entry.implementation === 'not-implemented'
+    )).toBe(true)
+
+    const report = await inspectWindowProvider('android-view-intent')
+    expect(report.provider).toBe('android-view-intent')
+    if (!process.env.PREFIX?.includes('com.termux')) {
+      expect(report.compatibility).toBe('incompatible')
+      expect(report.diagnostics[0]?.code).toBe('BUNDESK_PROVIDER_PLATFORM_UNSUPPORTED')
+    }
+  })
+
+  it('uses only the fallback chain supplied by the application', async () => {
+    const missing = join(tmpdir(), `bundesk-no-browser-${process.pid}`)
+    const common = {
+      appId: `runtime-provider-fallback-${process.pid}`,
+      url: 'https://example.invalid/',
+      provider: 'chromium-app' as const,
+      preferred: missing,
+      firefoxCandidates: [process.execPath],
+      inheritOutput: false,
+    }
+
+    try {
+      await openDesktopWindow(common)
+      throw new Error('Expected the concrete chromium-app provider to fail')
+    } catch (error) {
+      expect(error).toBeInstanceOf(WindowProviderError)
+      if (!(error instanceof WindowProviderError)) throw error
+      expect(error.kind).toBe('unavailable')
+      expect(error.attempts.map((attempt) => attempt.provider)).toEqual(['chromium-app'])
+    }
+
+    const window = await openDesktopWindow({
+      ...common,
+      fallback: [{ provider: 'firefox-window', on: ['unavailable'] }],
+    })
+    expect(window.provider).toBe('firefox-window')
+    expect(window.attempts.map(({ provider, outcome }) => ({ provider, outcome }))).toEqual([
+      { provider: 'chromium-app', outcome: 'failed' },
+      { provider: 'firefox-window', outcome: 'opened' },
+    ])
+    window.close()
+    await window.closed
   })
   it('routes install-pwa through the configured application lifecycle', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'bundesk-pwa-command-'))
@@ -141,7 +204,7 @@ describe('desktop runtime', () => {
       id: `runtime-pwa-install-command-${process.pid}`,
       server: { port: 0, stickyPort: false, fetch: () => new Response('installable') },
       window: {
-        provider: 'pwa',
+        provider: 'chromium-pwa',
         preferred: process.execPath,
         pwa: {
           appId,
@@ -184,7 +247,7 @@ describe('desktop runtime', () => {
       id: `runtime-pwa-install-forward-${process.pid}`,
       server: { port: 0, stickyPort: false, fetch: () => new Response('installable') },
       window: {
-        provider: 'browser',
+        provider: 'chromium-app',
         preferred: process.execPath,
         pwa: {
           appId,
@@ -433,7 +496,7 @@ describe('desktop runtime', () => {
     temporaryDirectories.push(directory)
     const server = Bun.serve({ port: 0, fetch: () => new Response('<title>Runtime test</title>') })
     try {
-      const window = await launchAppWindow({
+      const window = await launchChromiumAppWindow({
         appId: `runtime-browser-${process.pid}`,
         url: `http://127.0.0.1:${server.port}`,
         preferred: browser,
@@ -450,7 +513,7 @@ describe('desktop runtime', () => {
     }
   }, 30_000)
 
-  it.skipIf(process.platform === 'win32')('falls back to Firefox with an isolated tracked profile', async () => {
+  it.skipIf(process.platform === 'win32')('launches Firefox with an isolated tracked profile', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'bundesk-firefox-test-'))
     temporaryDirectories.push(directory)
     const executable = join(directory, 'firefox')
@@ -463,7 +526,7 @@ describe('desktop runtime', () => {
     await chmod(executable, 0o755)
 
     expect(await findFirefoxBrowser({ candidates: [join(directory, 'missing'), executable] })).toBe(executable)
-    const window = await launchAppWindow({
+    const window = await launchFirefoxWindow({
       appId: `runtime-firefox-${process.pid}`,
       url: 'http://127.0.0.1:43210/example',
       preferred: 'firefox',
@@ -472,8 +535,7 @@ describe('desktop runtime', () => {
       browserArgs: ['--test-argument'],
       inheritOutput: false,
     })
-    expect(window).not.toBeNull()
-    await window?.exited
+    await window.exited
     expect((await readFile(argsFile, 'utf8')).split('\n')).toEqual([
       '--new-instance',
       '--profile',
@@ -649,23 +711,21 @@ describe('service registration', () => {
     const unit = renderSystemdUnit('my-company.my-app', '/opt/my-app/bin/my-app')
     expect(unit).toContain('[Install]')
     expect(unit).toContain('WantedBy=default.target')
-    expect(unit).toContain('ExecStart="/opt/my-app/bin/my-app" serve --no-browser')
-    expect(unit).toContain('WorkingDirectory=/opt/my-app/bin')
+    expect(unit).toContain('ExecStart="/opt/my-app/bin/my-app" serve --no-window')
   })
 
   it('renders a launchd plist with log paths', () => {
     const plist = renderLaunchdPlist('my-company.my-app', '/Applications/My App.app/Contents/MacOS/My App', '/data/dir')
     expect(plist).toContain('<key>Label</key><string>my-company.my-app</string>')
     expect(plist).toContain('<string>serve</string>')
-    expect(plist).toContain('<string>--no-browser</string>')
-    expect(plist).toContain('<key>KeepAlive</key><true/>')
+    expect(plist).toContain('<string>--no-window</string>')
     expect(plist).toContain(join('/data/dir', 'service.log'))
   })
 
   it('renders a termux boot script', () => {
     const script = renderTermuxBootScript('/data/data/com.termux/files/usr/bin/my-app')
     expect(script).toContain('#!/data/data/com.termux/files/usr/bin/sh')
-    expect(script).toContain('exec "/data/data/com.termux/files/usr/bin/my-app" serve --no-browser')
+    expect(script).toContain('exec "/data/data/com.termux/files/usr/bin/my-app" serve --no-window')
   })
 
   it('routes service commands without writing when dry-running', async () => {
@@ -750,7 +810,7 @@ describe('webview2 window provider', () => {
         }),
       },
       window: {
-        provider: 'webview',
+        provider: 'webview2',
         path: '/',
         width: 480,
         height: 320,
@@ -766,9 +826,15 @@ describe('webview2 window provider', () => {
       expect(session.window).not.toBeNull()
       const window = session.window
       if (!window) throw new Error('Expected a window')
-      if (!('executeScript' in window)) throw new Error('Expected a WebView2 window from the webview provider')
+      if (!('executeScript' in window)) throw new Error('Expected a WebView2 window from the webview2 provider')
       const navigation = await navigated
       expect(navigation.success).toBe(true)
+      expect(await window.ready).toEqual({
+        evidence: 'navigation-completed',
+        url: session.url.href,
+      })
+      expect(window.lifecycle).toEqual({ ownership: 'window', windowCloseObservable: true })
+      expect(window.attempts).toEqual([{ provider: 'webview2', outcome: 'opened', diagnostics: [] }])
       const heading = await window.executeScript('document.querySelector("h1").textContent')
       expect(heading).toBe('webview-test')
     } finally {

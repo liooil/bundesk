@@ -172,6 +172,23 @@ function stopPump(): void {
   pump = undefined
 }
 
+export async function inspectWebView2Availability(): Promise<{ available: boolean; diagnostic?: string }> {
+  if (process.platform !== 'win32') {
+    return { available: false, diagnostic: 'WebView2 is available only on Windows' }
+  }
+  if (process.arch !== 'x64') {
+    return { available: false, diagnostic: `The current WebView2 shim supports Windows x64, not ${process.arch}` }
+  }
+  try {
+    const runtime = await loadShim()
+    return runtime.wv_use_runtime()
+      ? { available: true }
+      : { available: false, diagnostic: 'WebView2 Runtime was not found through EdgeUpdate registration' }
+  } catch (error) {
+    return { available: false, diagnostic: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 export async function createWebViewWindow(options: WebViewWindowOptions): Promise<WebViewWindow> {
   if (process.platform !== 'win32') {
     throw new Error('WebView2 windows are only available on Windows')

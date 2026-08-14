@@ -1,18 +1,12 @@
-import type { AppWindowOptions, InstalledPwaOptions } from './browser'
+import type { InstalledPwaOptions } from './browser'
 import type { SecondInstanceEvent, SingleInstanceResult } from './single-instance'
 import type { UpdateCheckResult, Updater, UpdaterOptions } from './updater'
 import type { WindowsIntegrationOptions, WindowsIntegrationResult, WindowsIntegrationStatus } from './windows-integration'
 import type { LinuxIntegrationOptions } from './linux-integration'
-import type { WebViewWindow } from './webview2'
 import type { PwaPolicyOptions } from './pwa-installation'
-import { join } from 'node:path'
-import { launchAppWindow, launchPwaWindow } from './browser'
 import { installPwaInteractively, installPwaWithPolicy, removePwaInstallationPolicy } from './pwa-installation'
-import { getAppDataDirectory } from './paths'
 import { readStickyPort, writeStickyPort, type StickyPortOptions } from './sticky-port'
 import { isBunHotMode, replaceHotRun } from './hot-reload'
-import { createWebViewWindow } from './webview2'
-import { createWebKitWindow } from './webkit'
 import { acquireSingleInstance } from './single-instance'
 import { cleanupAfterUpdate, createUpdater } from './updater'
 import {
@@ -23,17 +17,24 @@ import {
 import { getServiceStatus, installService, uninstallService } from './service-integration'
 import { notifySystem, type DesktopNotificationOptions } from './notifications'
 import { createTray, type DesktopTrayOptions, type TrayController } from './tray'
-import { isTermux } from './platform'
 import { resolveAppEnvironment, type AppEnvironment } from './environment'
 import {
   getWindowsIntegrationStatus,
   registerWindowsIntegration,
   unregisterWindowsIntegration,
 } from './windows-integration'
+import {
+  isWindowProviderId,
+  openDesktopWindow,
+  windowProviderIds,
+  type DesktopWindowHandle,
+  type WindowProviderId,
+  type WindowProviderOptions,
+} from './window-provider'
 
 export type DesktopIntegrationOptions = WindowsIntegrationOptions
 
-export type DesktopAppWindow = Bun.Subprocess | WebViewWindow
+export type DesktopAppWindow = DesktopWindowHandle
 export interface DesktopPwaOptions extends InstalledPwaOptions {
   /** URL presented to the browser for installation; defaults to the running app URL. */
   installUrl?: string | URL
@@ -44,25 +45,14 @@ export interface DesktopPwaOptions extends InstalledPwaOptions {
 }
 
 
-export interface DesktopWindowOptions extends Omit<AppWindowOptions, 'appId' | 'url'> {
+export interface DesktopWindowOptions extends Omit<WindowProviderOptions, 'pwa'> {
   path?: string
   exitWithWindow?: boolean
-  /** Browser App Mode (default), an installed Chromium PWA, Windows WebView2, or Linux WebKitGTK. */
-  provider?: 'browser' | 'pwa' | 'webview' | 'webkit'
-  /** Required by `provider: 'pwa'`; identifies the installed app and browser profile. */
+  /** Required by `provider: 'chromium-pwa'`; identifies the installed app and browser profile. */
   pwa?: DesktopPwaOptions
-  /** In-process providers ('webview'/'webkit'): initial window size and title. */
-  width?: number
-  height?: number
-  title?: string
-  /** In-process providers: page-initiated messages (window.chrome.webview.postMessage). */
-  onMessage?: (message: unknown) => void
-  /** In-process providers: navigation completion. */
-  onNavigateCompleted?: (info: { success: boolean; errorStatus: number }) => void
 }
 
-/** User-facing CLI choice; `webview` maps to WebView2 on Windows and WebKitGTK on Linux. */
-export type CliWindowProvider = 'browser' | 'pwa' | 'webview'
+export type CliWindowProvider = WindowProviderId
 
 export interface DesktopUpdateOptions extends UpdaterOptions {
   checkOnStartup?: boolean
@@ -125,8 +115,8 @@ export interface DesktopAppContext<WebSocketData = undefined> {
   /** Resolved app environment ('development' | 'production'); CLI > BUNDESK_ENV > NODE_ENV > default. */
   env: AppEnvironment
   window: DesktopAppWindow | null
-  /** Effective provider after applying a CLI --browser/--webview override. */
-  windowProvider: NonNullable<DesktopWindowOptions['provider']> | null
+  /** Concrete provider that opened the current window, after any app-configured fallback. */
+  windowProvider: WindowProviderId | null
   updater: Updater | null
   tray: TrayController<WebSocketData> | null
   notify(options: DesktopNotificationOptions): Promise<boolean>
@@ -186,8 +176,8 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
 
     const parsed = parseRuntimeArgs(args)
     const env = resolveAppEnvironment(args)
-    const cliWindowProvider = parsed.windowProvider && parsed.browser && parsed.command !== 'serve' && this.options.window !== false
-      ? resolveCliWindowProvider(parsed.windowProvider)
+    const cliWindowProvider = parsed.windowProvider && parsed.browser && parsed.command !== 'serve'
+      ? parsed.windowProvider
       : undefined
     if (parsed.afterUpdate) {
       await cleanupAfterUpdate({ waitForPid: parsed.waitForPid })
@@ -311,7 +301,9 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
         ? '[::1]'
         : configuredHost
     const appUrl = new URL(`${protocol}://${urlHost}:${server.port}`)
-    const windowOptions = this.options.window === false ? null : this.options.window ?? {}
+    const windowOptions = this.options.window === false
+      ? null
+      : this.options.window ?? (cliWindowProvider ? { provider: cliWindowProvider } : null)
     if (windowOptions?.path) appUrl.pathname = windowOptions.path.startsWith('/') ? windowOptions.path : `/${windowOptions.path}`
 
     let appWindow: DesktopAppWindow | null = null
@@ -320,56 +312,33 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
     const stoppedPromise = new Promise<void>((resolve) => {
       stopResolve = resolve
     })
+    let context: DesktopAppSession<WebSocketData>
+    let exitWithCurrentWindow = windowOptions?.exitWithWindow ?? !this.options.tray
     const launch = async (overrides: Partial<DesktopWindowOptions> = {}) => {
       if (!windowOptions) return null
-      const merged = {
+      const merged: DesktopWindowOptions = {
         ...windowOptions,
         ...overrides,
-        ...(cliWindowProvider ? { provider: cliWindowProvider } : {}),
+        provider: cliWindowProvider ?? overrides.provider ?? windowOptions.provider,
+        ...(cliWindowProvider ? { fallback: [] } : {}),
       }
       const windowUrl = new URL(appUrl)
       if (merged.path) windowUrl.pathname = merged.path.startsWith('/') ? merged.path : `/${merged.path}`
-      if (merged.provider === 'pwa') {
-        if (!merged.pwa) throw new Error("The pwa window provider requires window.pwa with an installed appId")
-        appWindow = await launchPwaWindow({
-          ...merged.pwa,
-          preferred: merged.preferred,
-          candidates: merged.candidates,
-          browserArgs: merged.browserArgs,
-          inheritOutput: merged.inheritOutput,
-        })
-      } else if (merged.provider === 'webview') {
-        if (process.platform !== 'win32') {
-          throw new Error('The webview window provider is only available on Windows')
-        }
-        appWindow = await createWebViewWindow({
-          url: String(windowUrl),
-          title: merged.title,
-          width: merged.width,
-          height: merged.height,
-          userDataFolder: merged.userDataDir ?? join(getAppDataDirectory(this.options.id), 'WebView2'),
-          onMessage: merged.onMessage,
-          onNavigateCompleted: merged.onNavigateCompleted,
-        })
-      } else if (merged.provider === 'webkit') {
-        if (process.platform !== 'linux') {
-          throw new Error('The webkit window provider is only available on Linux')
-        }
-        appWindow = await createWebKitWindow({
-          url: String(windowUrl),
-          title: merged.title,
-          width: merged.width,
-          height: merged.height,
-          onMessage: merged.onMessage,
-          onNavigateCompleted: merged.onNavigateCompleted,
-        })
-      } else {
-        appWindow = await launchAppWindow({
-          ...merged,
-          appId: this.options.id,
-          url: windowUrl,
-        })
+      appWindow = await openDesktopWindow({
+        ...merged,
+        appId: this.options.id,
+        url: windowUrl,
+      })
+      exitWithCurrentWindow = merged.exitWithWindow ?? !this.options.tray
+      if (exitWithCurrentWindow && !appWindow.lifecycle.windowCloseObservable) {
+        appWindow.close()
+        throw new Error(
+          `${appWindow.provider} does not expose observable window closure; ` +
+          'set window.exitWithWindow to false or choose another concrete provider',
+        )
       }
+      context.window = appWindow
+      context.windowProvider = appWindow.provider
       return appWindow
     }
     const stop = async () => {
@@ -377,17 +346,16 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       stopped = true
       stopResolve?.()
       tray?.destroy()
-      if (appWindow && appWindow.exitCode === null) appWindow.kill()
+      appWindow?.close()
       await server.stop(true)
       if (instance?.kind === 'primary') await instance.release()
     }
     const wait = async () => {
       const signal = waitForTerminationSignal()
-      // With a tray, closing the window keeps the app alive in the tray unless
+      // With a tray, closing an observable window keeps the app alive unless
       // exitWithWindow is explicitly enabled.
-      const shouldExitWithWindow = (windowOptions?.exitWithWindow ?? !this.options.tray) && !isTermux()
-      if (appWindow && shouldExitWithWindow) {
-        await Promise.race([appWindow.exited.then(() => undefined), signal.promise, stoppedPromise])
+      if (appWindow?.closed && exitWithCurrentWindow) {
+        await Promise.race([appWindow.closed.then(() => undefined), signal.promise, stoppedPromise])
       } else {
         await Promise.race([signal.promise, stoppedPromise])
       }
@@ -397,13 +365,13 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
 
     let tray: TrayController<WebSocketData> | null = null
     const notificationsAumid = typeof this.options.notifications === 'object' ? this.options.notifications.aumid : undefined
-    const context: DesktopAppSession<WebSocketData> = {
+    context = {
       kind: 'primary',
       server,
       url: appUrl,
       env,
       window: appWindow,
-      windowProvider: windowOptions ? cliWindowProvider ?? windowOptions.provider ?? 'browser' : null,
+      windowProvider: cliWindowProvider ?? windowOptions?.provider ?? null,
       updater,
       tray,
       notify: (notification) => notifySystem(notification, { aumid: notificationsAumid }),
@@ -431,7 +399,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
             try {
               if (trayOptions.onActivate) {
                 await trayOptions.onActivate(context)
-              } else if (!appWindow || appWindow.exitCode !== null) {
+              } else if (!appWindow || appWindow.isClosed()) {
                 await launch()
               }
             } catch (error) {
@@ -591,11 +559,8 @@ function renderCliHelp<WebSocketData, Routes extends string>(
     'Options:',
     '  -h, --help                   Show this help and exit',
     '  -V, --version                Show the application version and exit',
-    '      --browser                Open with the system Chromium browser',
-    '      --pwa                    Open the configured installed Chromium PWA',
-    '      --webview                Open with the platform-native embedded WebView',
-    '      --provider <provider>    Select browser, pwa, or webview',
-    '      --no-browser             Run without opening a desktop window',
+    `      --provider <provider>    Select one concrete provider: ${windowProviderIds.join(', ')}`,
+    '      --no-window              Run without opening a desktop window',
     '  -H, --host <hostname>        Override the server hostname',
     '  -p, --port <port>            Override the server port (0-65535)',
     '      --mode <mode>            Set development or production mode',
@@ -613,20 +578,6 @@ export function createDesktopApp<WebSocketData = undefined, Routes extends strin
   return new DesktopApp(options)
 }
 
-export function resolveCliWindowProvider(
-  provider: CliWindowProvider,
-  platform: NodeJS.Platform = process.platform,
-): NonNullable<DesktopWindowOptions['provider']> {
-  if (provider === 'browser' || provider === 'pwa') {
-    if (provider === 'pwa' && platform === 'linux' && isTermux()) {
-      throw new Error('The pwa provider is not available on Termux')
-    }
-    return provider
-  }
-  if (platform === 'win32') return 'webview'
-  if (platform === 'linux' && !isTermux()) return 'webkit'
-  throw new Error(`The webview provider is not available on ${platform}`)
-}
 
 
 function unsupportedIntegrationResult(): WindowsIntegrationResult {
@@ -663,22 +614,13 @@ function parseRuntimeArgs(args: string[]): ParsedRuntimeArgs {
     const arg = args[index]!
     if (index === 0 && ['serve', 'register', 'unregister', 'status', 'upgrade', 'install-service', 'uninstall-service', 'service-status', 'install-pwa', 'remove-pwa-policy'].includes(arg)) {
       parsed.command = arg as ParsedRuntimeArgs['command']
-    } else if (arg === '--browser') {
-      parsed.browser = true
-      parsed.windowProvider = 'browser'
-    } else if (arg === '--webview') {
-      parsed.browser = true
-      parsed.windowProvider = 'webview'
-    } else if (arg === '--pwa') {
-      parsed.browser = true
-      parsed.windowProvider = 'pwa'
     } else if (arg === '--provider') {
       parsed.browser = true
       parsed.windowProvider = parseCliWindowProvider(args[++index], arg)
     } else if (arg.startsWith('--provider=')) {
       parsed.browser = true
       parsed.windowProvider = parseCliWindowProvider(arg.slice(arg.indexOf('=') + 1), '--provider')
-    } else if (arg === '--no-browser') {
+    } else if (arg === '--no-window') {
       parsed.browser = false
     } else if (arg === '--dry-run') {
       parsed.dryRun = true
@@ -713,9 +655,10 @@ function isPwaCommand(command: ParsedRuntimeArgs['command']): command is 'instal
 }
 
 function parseCliWindowProvider(value: string | undefined, flag: string): CliWindowProvider {
-  if (value === 'browser' || value === 'pwa' || value === 'webview') return value
-  if (!value || value.startsWith('--')) throw new Error(`${flag} requires browser, pwa, or webview`)
-  throw new Error(`Invalid window provider: ${value} (expected browser, pwa, or webview)`)
+  if (value && isWindowProviderId(value)) return value
+  const expected = windowProviderIds.join(', ')
+  if (!value || value.startsWith('--')) throw new Error(`${flag} requires one of: ${expected}`)
+  throw new Error(`Invalid window provider: ${value} (expected one of: ${expected})`)
 }
 
 

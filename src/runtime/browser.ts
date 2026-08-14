@@ -142,10 +142,10 @@ const termuxUrlLaunchers = [
 ]
 
 /**
- * Termux has no Chromium CLI with App Mode. The window is an Android VIEW
- * intent: the OS opens the URL in the default (or chosen) browser.
+ * Dispatch a URL through Android's VIEW intent from Termux.
  */
-async function launchTermuxWindow(url: string): Promise<Bun.Subprocess | null> {
+export async function launchAndroidViewIntent(url: string): Promise<Bun.Subprocess> {
+  if (!isTermux()) throw new Error('The android-view-intent provider is only available in Termux')
   for (const launcher of termuxUrlLaunchers) {
     if (await Bun.file(launcher[0]!).exists()) {
       return Bun.spawn([...launcher, url], {
@@ -153,10 +153,11 @@ async function launchTermuxWindow(url: string): Promise<Bun.Subprocess | null> {
       })
     }
   }
-  return null
+  throw new Error('No Android VIEW intent launcher was found in Termux')
 }
 
-function systemBrowserCommand(url: string): string[] | null {
+export function systemBrowserCommand(url: string): string[] | null {
+  if (isTermux()) return null
   if (process.platform === 'win32') {
     return ['rundll32.exe', 'url.dll,FileProtocolHandler', url]
   }
@@ -168,63 +169,60 @@ function systemBrowserCommand(url: string): string[] | null {
   return null
 }
 
-async function openWithSystemBrowser(url: string, inheritOutput: boolean): Promise<void> {
-  const command = systemBrowserCommand(url)
-  if (!command) {
-    console.warn(`[BunDesk] No supported browser or system URL opener was found for ${url}`)
-    return
-  }
-  console.info(`[BunDesk] Opening ${url} with the system default browser (${command[0]})`)
+export async function launchSystemBrowser(url: string | URL, inheritOutput = true): Promise<void> {
+  const value = String(url)
+  const command = systemBrowserCommand(value)
+  if (!command) throw new Error(`No system URL opener was found for ${value}`)
+  console.info(`[BunDesk] Opening ${value} with the system default browser (${command[0]})`)
   const output = inheritOutput ? 'inherit' : 'ignore'
   const opener = Bun.spawn(command, { stdio: ['ignore', output, output] })
   const exitCode = await opener.exited
   if (exitCode !== 0) {
-    console.warn(`[BunDesk] System browser launcher exited with code ${exitCode}: ${command[0]}`)
+    throw new Error(`System browser launcher exited with code ${exitCode}: ${command[0]}`)
   }
 }
 
-export async function launchAppWindow(options: AppWindowOptions): Promise<Bun.Subprocess | null> {
-  if (isTermux()) return launchTermuxWindow(String(options.url))
-
+export async function launchChromiumAppWindow(options: AppWindowOptions): Promise<Bun.Subprocess> {
+  if (isTermux()) throw new Error('The chromium-app provider is not available in Termux')
   const url = String(options.url)
   const output = options.inheritOutput === false ? 'ignore' : 'inherit'
-  const browser = options.preferred === 'firefox' ? null : await findChromiumBrowser(options)
-  if (browser) {
-    const userDataDir = options.userDataDir ?? join(getAppDataDirectory(options.appId), 'Browser')
-    await mkdir(userDataDir, { recursive: true })
-    console.info(`[BunDesk] Opening ${url} in Chromium App Mode: ${browser}`)
-    return Bun.spawn([
-      browser,
-      `--app=${url}`,
-      `--user-data-dir=${userDataDir}`,
-      '--disable-extensions',
-      '--edge-skip-compat-layer-relaunch',
-      ...(options.browserArgs ?? []),
-    ], {
-      stdio: ['ignore', output, output],
-    })
-  }
+  const browser = await findChromiumBrowser(options)
+  if (!browser) throw new Error('The chromium-app provider requires an installed Chromium browser')
+  const userDataDir = options.userDataDir ?? join(getAppDataDirectory(options.appId), 'Browser')
+  await mkdir(userDataDir, { recursive: true })
+  console.info(`[BunDesk] Opening ${url} in Chromium App Mode: ${browser}`)
+  return Bun.spawn([
+    browser,
+    `--app=${url}`,
+    `--user-data-dir=${userDataDir}`,
+    '--disable-extensions',
+    '--edge-skip-compat-layer-relaunch',
+    ...(options.browserArgs ?? []),
+  ], {
+    stdio: ['ignore', output, output],
+  })
+}
 
+export async function launchFirefoxWindow(options: AppWindowOptions): Promise<Bun.Subprocess> {
+  if (isTermux()) throw new Error('The firefox-window provider is not available in Termux')
+  const url = String(options.url)
+  const output = options.inheritOutput === false ? 'ignore' : 'inherit'
   const firefox = await findFirefoxBrowser({ candidates: options.firefoxCandidates })
-  if (firefox) {
-    const userDataDir = options.userDataDir ?? join(getAppDataDirectory(options.appId), 'Firefox')
-    await mkdir(userDataDir, { recursive: true })
-    console.info(`[BunDesk] Opening ${url} in Firefox: ${firefox}`)
-    return Bun.spawn([
-      firefox,
-      '--new-instance',
-      '--profile',
-      userDataDir,
-      '--new-window',
-      url,
-      ...(options.browserArgs ?? []),
-    ], {
-      stdio: ['ignore', output, output],
-    })
-  }
-
-  await openWithSystemBrowser(url, options.inheritOutput !== false)
-  return null
+  if (!firefox) throw new Error('The firefox-window provider requires an installed Firefox browser')
+  const userDataDir = options.userDataDir ?? join(getAppDataDirectory(options.appId), 'Firefox')
+  await mkdir(userDataDir, { recursive: true })
+  console.info(`[BunDesk] Opening ${url} in Firefox: ${firefox}`)
+  return Bun.spawn([
+    firefox,
+    '--new-instance',
+    '--profile',
+    userDataDir,
+    '--new-window',
+    url,
+    ...(options.browserArgs ?? []),
+  ], {
+    stdio: ['ignore', output, output],
+  })
 }
 
 export interface ResolvedPwaTarget {

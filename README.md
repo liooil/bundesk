@@ -25,7 +25,7 @@ In development the app is an ordinary Bun HTTP server and an ordinary web page:
 
 - server code runs directly under Bun, so existing TypeScript debugging techniques work;
 - the UI is debugged with the browser's DevTools, no custom debugging bridge;
-- `--no-browser` starts only the server, so you can debug with any browser or API client;
+- `--no-window` starts only the server, so you can debug with any browser or API client;
 - app routes, Bun plugins, and Vite/Tailwind and Worker build logic all stay in the app repository.
 
 ### Cross-compilation support
@@ -54,7 +54,7 @@ BunDesk suits tool-style desktop apps built around a local HTTP service plus a W
 ## Core features
 
 - `createDesktopApp(...)` hosts the server, windows and lifecycle in one place;
-- low-level composable APIs such as `launchAppWindow(...)`;
+- low-level composable APIs such as `openDesktopWindow(...)`;
 - standalone Edge/Chrome/Chromium `--app=<url>` windows (Brave included on macOS); Termux uses the Android VIEW intent;
 - loopback IPC single instance with a random 256-bit token;
 - secondary instances forward `argv`, `cwd` and PID to the primary instance's callback;
@@ -110,6 +110,7 @@ const app = createDesktopApp({
   },
 
   window: {
+    provider: 'chromium-app',
     path: '/',
     preferred: 'edge',
     exitWithWindow: true,
@@ -154,15 +155,13 @@ await app.run()
 The framework reserves the following app commands:
 
 ```text
-my-app                         start the server and a browser window
+my-app                         start the server and the configured concrete window provider
 my-app --help                  print help generated from the config, then exit
 my-app --version               print the application name and version, then exit
-my-app --browser               force the system browser provider
-my-app --pwa                   open the configured installed Chromium PWA
-my-app --webview               force the platform-native in-process WebView
-my-app --provider pwa          explicitly select browser, pwa, or webview
+my-app --provider webview2     explicitly pin one concrete provider (disables configured fallback)
+my-app --no-window             run without opening a window
 my-app <file>                  start, or forward the file argument to the primary instance
-my-app serve --no-browser      start only the HTTP server
+my-app serve --no-window       start only the HTTP server
 my-app register [--default]    register per-user file associations and a launcher
 my-app unregister              undo the registration
 my-app status                  show desktop integration status
@@ -187,8 +186,8 @@ the npm package). It demonstrates:
 
 - a **fullstack page** (HTML import route — hot-reload in dev, AOT in the
   compiled binary)
-- **window providers**: `webview` on Windows, `webkit` on Linux, `browser`
-  elsewhere — picked at runtime from `process.platform`
+- an app-owned **window provider policy**: `webview2` → Chromium → Firefox on
+  Windows, `webkitgtk` → Chromium → Firefox on Linux, and Chromium → Firefox on macOS
 - **tray** (Windows + Linux), **notifications**, **single instance**, **desktop
   integration** (`register` / `unregister` / `status`), the resolved
   **runtime environment** (`context.env`)
@@ -216,7 +215,7 @@ import {
   createUpdater,
   findChromiumBrowser,
   findFirefoxBrowser,
-  launchAppWindow,
+  openDesktopWindow,
   registerWindowsIntegration,
   staticBinaryProvider,
 } from 'bundesk'
@@ -297,7 +296,7 @@ const app = createDesktopApp({
       '/api/data': () => Response.json({ ok: true }),
     },
   },
-  window: { provider: 'webview' },
+  window: { provider: 'chromium-app' },
 })
 ```
 
@@ -494,7 +493,7 @@ my-app uninstall-service      # stop and remove
 
 Conventions:
 
-- The service runs as `"<exe>" serve --no-browser`, with the executable path fixed at registration time; the framework's atomic self-update replaces the file at the same path, so the service does not need re-registration;
+- The service runs as `"<exe>" serve --no-window`, with the executable path fixed at registration time; the framework's atomic self-update replaces the file at the same path, so the service does not need re-registration;
 - the `active` field of `service-status` is determined from the single-instance record (`instance.json` + PID liveness), consistently across platforms;
 - `install-service` / `uninstall-service` support a `--dry-run` preview;
 - the service uses `WorkingDirectory`/`RunAtLoad`/`Restart=on-failure`/`KeepAlive` to be restarted after crashes; relative paths inside the app should resolve against `process.execPath`, not cwd.
@@ -566,8 +565,8 @@ Known trade-offs:
 
 ## PWA installation and windows
 
-The `pwa` provider launches an Edge/Chrome/Brave/Chromium web app by its
-Chromium app id. BunDesk can also assist the initial installation:
+The concrete `chromium-pwa` provider launches an Edge/Chrome/Brave/Chromium
+web app by its Chromium app id. BunDesk can also assist the initial installation:
 
 ```ts
 const app = createDesktopApp({
@@ -575,7 +574,7 @@ const app = createDesktopApp({
   // A PWA needs a stable origin. Do not use a dynamic port here.
   server: { port: 43123, routes: { '/': page } },
   window: {
-    provider: 'pwa',
+    provider: 'chromium-pwa',
     exitWithWindow: false,
     preferred: 'edge',
     pwa: {
@@ -662,72 +661,97 @@ and [Google Chrome policy list](https://chromeenterprise.google/policies/#WebApp
   Chromium. Automated policy installation supports Edge and Chrome on Windows.
   Firefox and Termux are not supported.
 
-CLI `--pwa` (or `--provider pwa`) selects the installed-PWA window provider;
-it does not run the installation command.
+CLI `--provider chromium-pwa` pins the installed-PWA window provider; it does
+not run the installation command or select another provider.
 
-## WebView2 windows (Windows)
+## Concrete window providers and explicit fallback
 
-Besides launching the system browser in App Mode, a window can be hosted
-in-process by WebView2 (the system WebView2 Runtime / Edge-unified runtime —
-nothing is bundled):
+BunDesk never maps a platform to a provider, never appends an implicit
+fallback, and has no default provider. Omitting `window` opens no window.
+The app names one concrete implementation:
 
 ```ts
 const app = createDesktopApp({
   id: 'my-company.my-app',
   server: {
     port: 0,
-    routes: { '/': new Response('<h1>Hello</h1>', { headers: { 'content-type': 'text/html; charset=utf-8' } }) },
+    routes: {
+      '/': new Response('<h1>Hello</h1>', {
+        headers: { 'content-type': 'text/html; charset=utf-8' },
+      }),
+    },
   },
   window: {
-    provider: 'webview',          // 'browser' (default), 'pwa', or 'webview'
+    provider: 'webview2',
+    fallback: [
+      { provider: 'chromium-app', on: ['unsupported', 'unavailable'] },
+      { provider: 'firefox-window', on: ['unsupported', 'unavailable'] },
+    ],
     path: '/',
     width: 900,
     height: 640,
     title: 'My App',
     onMessage: (message) => console.log('page says:', message),
-    onNavigateCompleted: ({ success, errorStatus }) => console.log('navigated:', success, errorStatus),
   },
 })
 ```
 
-- The page communicates with the app over `window.chrome.webview.postMessage`
-  (messages arrive in `onMessage`); the window handle (`context.window`) adds
-  `executeScript`, `postMessage` and `navigate` on top of the `Bun.Subprocess`
-  surface.
-- The WebView2 user-data folder defaults to `<appData>/WebView2`.
-- Implementation: a header-free C shim (COM vtable layouts verified against the
-  official WebView2.h) compiled at runtime by Bun's embedded TinyCC. The
-  official WebView2Loader.dll is deliberately not used: the shim reads the
-  runtime install path from the EdgeUpdate registry key and calls
-  `CreateWebViewEnvironmentWithOptionsInternal` in
-  `EmbeddedBrowserWebView.dll` directly. That export is undocumented but
-  de-facto ABI-stable — it is the exact dependency the official loader uses
-  (its env-creation path is GetProcAddress on this export plus a direct call),
-  so a frozen binary fails identically either way — no native toolchain, no
-  downloaded binaries, single-binary build preserved.
-- Pages served by the app must set a real `content-type` (`text/html`); without
-  it the page renders as plain text.
+The application owns every decision here: the primary provider, fallback
+providers, their order, and the failure classes that permit each fallback.
+Without `fallback`, provider failure is final. `--provider <id>` explicitly
+pins one provider and disables the configured fallback chain; `--no-window`
+opens none.
 
-Window providers by platform (`provider: 'browser'` is the default everywhere;
-it prefers Chromium App Mode and falls back to an isolated Firefox window):
+Available concrete IDs:
 
-The CLI can override the config with `--browser`, `--pwa`, or `--webview`
-(equivalently `--provider browser|pwa|webview`). CLI `webview` is a
-cross-platform abstraction: it maps to `webview` on Windows and `webkit` on
-Linux; unsupported platforms fail with a clear error. `--no-browser` still
-means no window at all. The `window.provider` config property uses the literal
-provider names in the table.
+| Provider | Mechanism | Window-close observation |
+| --- | --- | --- |
+| `webview2` | Windows in-process WebView2 | Yes |
+| `webkitgtk` | Linux in-process WebKitGTK | Yes |
+| `chromium-app` | Isolated Chromium `--app=<url>` process | Yes, for the managed process |
+| `chromium-pwa` | Installed Chromium app id | No; the process may only be the launcher |
+| `firefox-window` | Isolated Firefox profile/window process | Yes, for the managed process |
+| `system-browser` | OS URL opener | No |
+| `android-view-intent` | Termux Android VIEW intent | No; the process is only the dispatcher |
 
-| Platform | In-process provider | Status | Mechanism |
+`webview2` and `webkitgtk` expose `navigate`, `executeScript`, `postMessage`,
+navigation readiness, and page-to-host messages. Pages must send a real
+`content-type: text/html` response. `webview2` uses the system WebView2 Runtime
+and a header-free C shim compiled by Bun's embedded TinyCC. It deliberately
+bypasses `WebView2Loader.dll`, discovers the Edge-unified runtime, and directly
+calls the undocumented `CreateWebViewEnvironmentWithOptionsInternal` export.
+`webkitgtk` requires the WebKit2GTK 4.1 stack and a desktop display.
+
+The returned `DesktopWindowHandle` is discriminated by `provider` and `kind`.
+It exposes `ready`, `closed`, `lifecycle`, `capabilities`, `close()`, and the
+full `attempts` trace. Embedded handles additionally expose the script,
+message, and navigation methods. `ready` records concrete evidence:
+`navigation-completed`, `process-started`, or `launch-dispatched`.
+
+Use the fact APIs without triggering a framework choice:
+
+```ts
+const report = await inspectWindowProvider('webview2')
+const releaseEvidence = getWindowProviderMatrix()
+```
+
+`report` separates target compatibility, current-machine availability, release
+verification, capabilities, and structured diagnostics. The release matrix is
+evidence only; neither API selects or substitutes a provider.
+
+Current embedded-provider evidence:
+
+| Provider | Target | Implementation | Verification |
 | --- | --- | --- | --- |
-| Windows | `webview` (WebView2) | **Implemented** | C shim compiled by embedded TinyCC; direct call into the runtime's `EmbeddedBrowserWebView.dll` (no loader binary) |
-| Linux | `webkit` (WebKitGTK) | **Implemented** | `webkit2gtk-4.1` C API shim compiled by embedded TinyCC (`run_javascript` → `executeScript`, `script-message-received` → `onMessage`); GTK3 and GTK4 webkit builds both supported (base detected at runtime); requires the WebKitGTK stack installed (e.g. `pacman -S webkit2gtk-4.1` / `apt install libwebkit2gtk-4.1-0`); DMA-BUF rendering is disabled by default on Wayland for GBM compatibility (set `WEBKIT_DISABLE_DMABUF_RENDERER=0` before launch to override); in WSLg set `WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1` (plus `LIBGL_ALWAYS_SOFTWARE=1` if the GPU init fails) |
-| macOS | `wkwebview` (WKWebView) | Not implemented | `objc_msgSend` FFI shim; feasible but the most fragile (ObjC blocks, NSApplication run loop) |
-| Termux | — | Not supported | Android has no shell-process WebView API; embedded WebView needs an APK. VIEW intent (`browser`) is the intended path |
+| `webview2` | Windows x64 | Implemented | Experimental; native create/navigation/script/message/close smoke passed |
+| `webview2` | Windows arm64 | Not implemented | Current implementation needs runtime TinyCC, unavailable in the tested compiled Bun runtime |
+| `webkitgtk` | Linux x64 | Implemented | Native WSLg create/navigation/script/message/close smoke passed |
+| `webkitgtk` | Linux arm64 | Implemented | Unverified |
+| `wkwebview` | macOS | Not implemented | No provider ID is exposed |
 
-In config, `window.provider = 'webview'` throws on non-Windows platforms;
-Linux config uses `webkit`, while its CLI spelling remains the portable
-`--webview`.
+`exitWithWindow: true` is rejected when the selected provider cannot observe
+the actual window closing. Set it to `false` for `chromium-pwa`,
+`system-browser`, and `android-view-intent`.
 
 ## Automatic updates
 

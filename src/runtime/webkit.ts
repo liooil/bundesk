@@ -3,8 +3,8 @@ import { materializeNativePath } from './native-assets'
 import shimPath from '../webkit-shim.c' with { type: 'file' }
 
 /**
- * WebKitGTK window provider (Linux) — the in-process window used by
- * `provider: 'webkit'`. Mirrors the WebView2 provider's surface
+ * WebKitGTK window provider (Linux) — the in-process window used by the
+ * concrete `webkitgtk` provider. Mirrors the WebView2 provider's surface
  * (`WebViewWindow`): executeScript, postMessage, navigate, close + the
  * Bun.Subprocess-compatible exitCode/exited, so pages written for
  * `window.chrome.webview` work unchanged (the shim injects the bridge).
@@ -107,6 +107,22 @@ function stopPump(): void {
   pump = undefined
 }
 
+export async function inspectWebKitAvailability(): Promise<{ available: boolean; diagnostic?: string }> {
+  if (process.platform !== 'linux') {
+    return { available: false, diagnostic: 'WebKitGTK is available only on Linux' }
+  }
+  try {
+    const runtime = await loadShim()
+    if (runtime.wk_init()) {
+      runtime.wk_close()
+      return { available: true }
+    }
+    return { available: false, diagnostic: `WebKitGTK initialization diagnostic ${runtime.wk_diag()}` }
+  } catch (error) {
+    return { available: false, diagnostic: error instanceof Error ? error.message : String(error) }
+  }
+}
+
 export async function createWebKitWindow(options: WebKitWindowOptions): Promise<WebKitWindow> {
   if (process.platform !== 'linux') {
     throw new Error('WebKitGTK windows are only available on Linux')
@@ -193,8 +209,7 @@ export async function createWebKitWindow(options: WebKitWindowOptions): Promise<
     throw new Error(
       `WebKitGTK not available (init diagnostic ${diag}). ` +
         'Install the WebKit2GTK 4.1 stack ' +
-        '(libwebkit2gtk-4.1, libjavascriptcoregtk-4.1, libgtk-4) and a display server; ' +
-        "or use the default 'browser' provider.",
+        '(libwebkit2gtk-4.1, libjavascriptcoregtk-4.1, libgtk-4) and a display server.',
     )
   }
 
