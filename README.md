@@ -180,26 +180,61 @@ my-app upgrade [--force]       check for, install and restart after an upgrade
 
 ## Example app
 
-[`example-app/`](example-app/) is a runnable showcase of the framework,
-packaged into per-platform executables by the CI pipeline (it is not part of
-the npm package). It demonstrates:
+[`example-app/`](example-app/) is an interactive playground that configures
+every BunDesk feature in one runnable app (not published in the npm package).
+Its page is itself a fullstack route and links the live JSON endpoints:
 
-- a **fullstack page** (HTML import route — hot-reload in dev, AOT in the
-  compiled binary)
+- **fullstack page** (HTML import — HMR in dev, AOT in the binary) plus a PWA
+  manifest, service worker, and generated PNG icons
 - an app-owned **window provider policy**: `webview2` → Chromium → Firefox on
-  Windows, `webkitgtk` → Chromium → Firefox on Linux, and Chromium → Firefox on macOS
-- **tray** (Windows + Linux), **notifications**, **single instance**, **desktop
-  integration** (`register` / `unregister` / `status`), the resolved
-  **runtime environment** (`context.env`)
-- a headless `--smoke` mode used by CI to verify the server without a display
+  Windows, `webkitgtk` → Chromium → Firefox on Linux, Chromium → Firefox on
+  macOS, plus `--provider` pinning for every concrete provider
+- **provider matrix and window-handle facts** served from the composable API
+  (`/api/providers`)
+- **PWA installation**: `install-pwa`, `install-pwa --policy`,
+  `remove-pwa-policy`, and `chromium-pwa` windows
+- **single instance** with a second-instance handler that records forwarded
+  `argv`, `cwd`, and PID in the page and reopens the window
+- **updates**: GitHub Releases provider by default (`structuralUpdates` on),
+  optional static-binary provider via `BUNDESK_EXAMPLE_UPDATE_URL`, a live
+  check button, and the `upgrade` command
+- **tray** (Windows + Linux), **notifications** through both the embedded
+  window bridge and the HTTP API, **desktop integration**, **service
+  registration**, **sticky port**, and the resolved **runtime environment**
+- build configs for Windows metadata/icon/console modes, Linux, and macOS
+  `.app` bundles with document/URL types and a generated `.icns` icon
 
 ```bash
 cd example-app
-bun run dev        # open the desktop window (dev environment, HMR active)
-bun run smoke      # headless server check, no window
-bun run build      # build the executables for the current OS
-bun run build:win  # force a Windows target
+bun run dev              # open the desktop window (dev environment, HMR active)
+bun run smoke            # headless server/feature check, no window
+bun run second-instance  # while dev is running: forward argv/cwd/PID to it
+bun run help             # generated CLI help including PWA/update commands
+bun run build            # build the executables for the current OS
+bun run build:win        # force a Windows target
+bun run build:macos      # force both macOS .app targets
 ```
+
+Convenience npm scripts also exist for `serve`, `register`, `unregister`,
+`status`, `service:install`, `service:uninstall`, `service:status`,
+`pwa:install`, `pwa:policy`, `pwa:remove-policy`, and `upgrade`.
+
+Playground tuning environment variables:
+
+- `BUNDESK_EXAMPLE_PORT` — default port (`43123`); use `--port 0` for sticky
+  random ports
+- `BUNDESK_EXAMPLE_VERSION` — overrides the embedded app version (defaults
+  to the framework `package.json` version at build time)
+- `BUNDESK_EXAMPLE_DATA_DIR` — app data root (single-instance, sticky port,
+  isolated browser/PWA profile)
+- `BUNDESK_EXAMPLE_UPDATE_URL` — switch updates to a static binary URL
+  (optionally `BUNDESK_EXAMPLE_UPDATE_VERSION` and
+  `BUNDESK_EXAMPLE_UPDATE_CHANGELOG_URL`)
+- `BUNDESK_EXAMPLE_CONSOLE` — `detached` (default), `hidden`, or `inherit`
+  when building the Windows executable
+- Windows cross-builds cache a downloaded Bun runtime in
+  `example-app/.cache/bundesk-runtime` (configurable through the `runtime`
+  field in `bundesk.config.ts`)
 
 CI (`.github/workflows/ci.yml`) builds each platform on its native runner
 (Windows x64, Linux x64, macOS arm64 + x64) and smoke-tests both the source

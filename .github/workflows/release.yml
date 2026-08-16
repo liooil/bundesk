@@ -64,10 +64,14 @@ jobs:
         run: |
           $process = Start-Process -FilePath "example-app\dist\example-app.exe" -ArgumentList "--smoke" -Wait -PassThru
           if ($process.ExitCode -ne 0) { Write-Error "smoke failed (exit $($process.ExitCode))"; exit 1 }
-      - name: Archive macOS app bundles
+      - name: Archive macOS app bundles and publish raw executables
         if: runner.os == 'macOS'
         run: |
           cd example-app/dist
+          # Keep the inner Mach-O as a direct asset too: the playground updater
+          # points at this file for app-only executable updates.
+          cp example-app-macos.app/Contents/MacOS/example-app-macos example-app-macos
+          cp example-app-macos-x64.app/Contents/MacOS/example-app-macos-x64 example-app-macos-x64
           ditto -c -k --keepParent example-app-macos.app example-app-macos-arm64.zip
           ditto -c -k --keepParent example-app-macos-x64.app example-app-macos-x64.zip
           rm -rf example-app-macos.app example-app-macos-x64.app

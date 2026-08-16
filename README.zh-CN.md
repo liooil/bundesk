@@ -180,20 +180,38 @@ my-app upgrade [--force]       检查、安装升级并重启
 
 ## 示例应用
 
-[`example-app/`](example-app/) 是可运行的功能展示应用,由 CI 流水线打包为各平台可执行文件(不随 npm 包发布)。它展示:
+[`example-app/`](example-app/) 是一个交互式 playground，在一个可运行应用里配置 BunDesk 的全部功能（不随 npm 包发布）。页面本身是 fullstack 路由，并链接了各功能的实时 JSON 端点：
 
-- **全栈页面**(HTML import 路由——开发时热更新,编译产物 AOT)
-- 应用自行定义的**窗口 provider 策略**：Windows 为 `webview2` → Chromium → Firefox，Linux 为 `webkitgtk` → Chromium → Firefox，macOS 为 Chromium → Firefox
-- **托盘**(Windows + Linux)、**通知**、**单实例**、**桌面集成**(`register` / `unregister` / `status`)、解析出的**运行环境**(`context.env`)
-- 供 CI 无头验证的 `--smoke` 服务模式（不开窗口）
+- **全栈页面**（HTML import——开发时热更新，编译产物 AOT），并提供 PWA manifest、service worker 和运行时生成的 PNG 图标
+- 应用自行定义的**窗口 provider 策略**：Windows 为 `webview2` → Chromium → Firefox，Linux 为 `webkitgtk` → Chromium → Firefox，macOS 为 Chromium → Firefox；同时支持 `--provider` 固定任意具体 provider
+- 组合式 API 提供的 **provider matrix 和窗口句柄事实**（`/api/providers`）
+- **PWA 安装**：`install-pwa`、`install-pwa --policy`、`remove-pwa-policy` 和 `chromium-pwa` 窗口
+- **单实例**：次实例的 `argv`、`cwd`、PID 转发到主实例回调，并记录在页面中、重新打开窗口
+- **自动升级**：默认使用 GitHub Releases provider（开启 `structuralUpdates`），可通过 `BUNDESK_EXAMPLE_UPDATE_URL` 切换静态二进制 provider；页面提供检查按钮，CLI 提供 `upgrade` 命令
+- **托盘**（Windows + Linux）、**通知**（嵌入窗口 bridge 与 HTTP API 两条路径）、**桌面集成**、**服务注册**、**粘性端口**和解析出的**运行环境**
+- 构建配置覆盖 Windows 元数据/图标/控制台模式、Linux，以及带文档类型、URL scheme 和生成 `.icns` 图标的 macOS `.app`
 
 ```bash
 cd example-app
-bun run dev        # 打开桌面窗口(dev 环境,HMR 生效)
-bun run smoke      # 无头服务检查，不开窗口
-bun run build      # 构建当前平台的产物
-bun run build:win  # 强制 Windows 目标
+bun run dev              # 打开桌面窗口(dev 环境,HMR 生效)
+bun run smoke            # 无头服务/功能检查，不开窗口
+bun run second-instance  # dev 运行时转发 argv/cwd/PID 到主实例
+bun run help             # 查看生成的 CLI 帮助（含 PWA/更新命令）
+bun run build            # 构建当前平台的产物
+bun run build:win        # 强制 Windows 目标
+bun run build:macos      # 强制构建两个 macOS .app 目标
 ```
+
+package.json 还提供 `serve`、`register`、`unregister`、`status`、`service:install`、`service:uninstall`、`service:status`、`pwa:install`、`pwa:policy`、`pwa:remove-policy` 和 `upgrade` 快捷脚本。
+
+Playground 环境变量：
+
+- `BUNDESK_EXAMPLE_PORT` — 默认端口（`43123`）；传 `--port 0` 可体验粘性随机端口
+- `BUNDESK_EXAMPLE_VERSION` — 覆盖内嵌应用版本（构建时默认使用框架 `package.json` 的版本）
+- `BUNDESK_EXAMPLE_DATA_DIR` — 应用数据根目录（单实例、粘性端口、隔离的浏览器/PWA profile）
+- `BUNDESK_EXAMPLE_UPDATE_URL` — 切换为静态二进制升级地址（可选 `BUNDESK_EXAMPLE_UPDATE_VERSION` 和 `BUNDESK_EXAMPLE_UPDATE_CHANGELOG_URL`）
+- `BUNDESK_EXAMPLE_CONSOLE` — 构建 Windows executable 时选择 `detached`（默认）、`hidden` 或 `inherit`
+- Windows 交叉构建会把下载的 Bun runtime 缓存到 `example-app/.cache/bundesk-runtime`（可通过 `bundesk.config.ts` 的 `runtime` 字段调整）
 
 CI(`.github/workflows/ci.yml`)在各平台原生 runner 上构建(Windows x64、Linux x64、macOS arm64 + x64),并对源码与编译产物分别做冒烟测试。
 

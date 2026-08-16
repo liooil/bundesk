@@ -1,15 +1,29 @@
 {
   "name": "bundesk-example-app",
   "private": true,
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "scripts": {
     "dev": "bun src/main.ts",
     "smoke": "bun src/main.ts --smoke",
+    "help": "bun src/main.ts --help",
+    "version": "bun src/main.ts --version",
+    "serve": "bun src/main.ts serve --no-window",
+    "second-instance": "bun src/main.ts playground-file.bundesk-demo",
+    "register": "bun src/main.ts register",
+    "unregister": "bun src/main.ts unregister",
+    "status": "bun src/main.ts status",
+    "service:install": "bun src/main.ts install-service",
+    "service:uninstall": "bun src/main.ts uninstall-service",
+    "service:status": "bun src/main.ts service-status",
+    "pwa:install": "bun src/main.ts install-pwa",
+    "pwa:policy": "bun src/main.ts install-pwa --policy",
+    "pwa:remove-policy": "bun src/main.ts remove-pwa-policy",
+    "upgrade": "bun src/main.ts upgrade",
     "build": "bun ../src/cli.ts -c bundesk.config.ts",
-    "build:win": "bun ../src/cli.ts -c bundesk.config.ts -t bun-windows-x64",
-    "build:linux": "bun ../src/cli.ts -c bundesk.config.ts -t bun-linux-x64",
-    "build:macos": "bun ../src/cli.ts -c bundesk.config.ts -t bun-darwin-arm64",
+    "build:win": "bun bin/build-target.ts win32 bun-windows-x64",
+    "build:linux": "bun bin/build-target.ts linux bun-linux-x64",
+    "build:macos": "bun bin/build-target.ts darwin native",
     "typecheck": "tsc --noEmit"
   }
 }

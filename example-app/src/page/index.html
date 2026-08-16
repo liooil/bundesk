@@ -2,27 +2,86 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>BunDesk Example App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>BunDesk Playground</title>
+    <meta name="theme-color" content="#2563eb" />
     <link rel="stylesheet" href="./app.css" />
   </head>
   <body>
     <main class="card">
-      <h1>BunDesk Example App</h1>
-      <dl class="info" id="info">
-        <div><dt>app id</dt><dd id="app-id">…</dd></div>
-        <div><dt>version</dt><dd id="app-version">…</dd></div>
-        <div><dt>environment</dt><dd id="app-env">…</dd></div>
-        <div><dt>platform</dt><dd id="app-platform">…</dd></div>
-        <div><dt>window provider</dt><dd id="app-provider">…</dd></div>
-        <div><dt>bridge</dt><dd id="bridge-state">…</dd></div>
-      </dl>
-      <div class="controls">
-        <button id="notify" disabled>Send notification</button>
-        <button id="reload">Reload page</button>
-      </div>
-      <p class="hint" id="hint">
+      <header>
+        <p class="eyebrow">bundesk feature playground</p>
+        <h1>BunDesk Playground</h1>
+        <p class="subtitle">
+          One runnable app configured with the full BunDesk surface. Buttons and API links
+          below exercise the same code paths as a real desktop application.
+        </p>
+      </header>
+
+      <section aria-label="Application facts">
+        <h2>Application facts</h2>
+        <dl class="info" id="info">
+          <div><dt>app id</dt><dd id="app-id">…</dd></div>
+          <div><dt>version</dt><dd id="app-version">…</dd></div>
+          <div><dt>environment</dt><dd id="app-env">…</dd></div>
+          <div><dt>platform</dt><dd id="app-platform">…</dd></div>
+          <div><dt>window provider</dt><dd id="app-provider">…</dd></div>
+          <div><dt>updater</dt><dd id="app-updater">…</dd></div>
+          <div><dt>bridge</dt><dd id="bridge-state">…</dd></div>
+        </dl>
+      </section>
+
+      <section aria-label="Playground controls">
+        <h2>Try it live</h2>
+        <div class="controls">
+          <button id="notify-api">Notify via HTTP API</button>
+          <button id="notify-bridge" disabled>Notify via window bridge</button>
+          <button id="reload">Reload page</button>
+          <a class="button" href="/api/playground" target="_blank" rel="noreferrer">Playground JSON</a>
+          <a class="button" href="/api/providers" target="_blank" rel="noreferrer">Provider matrix</a>
+          <a class="button" href="/manifest.webmanifest" target="_blank" rel="noreferrer">PWA manifest</a>
+        </div>
+        <p class="hint" id="notify-result">Notification result appears here.</p>
+      </section>
+
+      <section aria-label="Updates">
+        <h2>Updates</h2>
+        <p>
+          GitHub Releases is the default provider (static binary URLs can be selected with
+          <code>BUNDESK_EXAMPLE_UPDATE_URL</code>). The <code>upgrade</code> CLI command performs
+          the real install/restart flow; this button only runs the configured provider check.
+        </p>
+        <div class="controls">
+          <button id="update-check">Check for update</button>
+        </div>
+        <pre class="console" id="update-result">Not checked yet.</pre>
+      </section>
+
+      <section aria-label="Single instance">
+        <h2>Single instance forwarding</h2>
+        <p>
+          Start a second instance while this app is running (for example with
+          <code>bun run second-instance</code>) and its argv, cwd and PID arrive here:
+        </p>
+        <ul class="events" id="second-instance-events">
+          <li class="empty">No second instance events yet.</li>
+        </ul>
+      </section>
+
+      <section aria-label="Configured features">
+        <h2>Configured features</h2>
+        <ul class="features" id="features"></ul>
+      </section>
+
+      <section aria-label="Framework commands">
+        <h2>Framework commands</h2>
+        <ul class="commands" id="commands"></ul>
+      </section>
+
+      <p class="hint">
         The page is served by the fullstack pipeline: edit <code>src/page/app.ts</code> and
-        the window hot-reloads in development.
+        the window hot-reloads in development. Closing the window keeps the Windows/Linux
+        backend in the tray; use <code>Quit</code> to stop it.
       </p>
     </main>
     <script type="module" src="./app.ts"></script>
