@@ -8,10 +8,20 @@ type FetchHandler<WebSocketData = undefined> = (
 
 /**
  * Add the token-authenticated single-instance endpoint as a fallback fetch
- * handler without replacing Bun's native routes table. This also handles
- * proxy-style absolute-form requests produced by Bun 1.3 when `fetch({ unix })`
- * runs with HTTP_PROXY/HTTPS_PROXY set: uWebSockets does not match those in its
- * path router, but Bun normalizes `request.url` before invoking fetch.
+ * handler without replacing Bun's native routes table.
+ *
+ * Bun 1.3.14 compatibility: when `HTTP_PROXY`/`HTTPS_PROXY` is set,
+ * `fetch(url, { unix })` connects to the unix socket but writes a proxy-style
+ * absolute-form request target (`GET http://host/path HTTP/1.1`). Its native
+ * uWebSockets path router does not match that target, while the fallback fetch
+ * receives a normalized `request.url` and can still dispatch the IPC request.
+ *
+ * Bun 1.4.0-canary.1+4c689909e still emits absolute-form on the wire, but its
+ * router uses `getUrlForRouting()` to extract the path, so native routes and
+ * HTML bundles work. Keep this fallback while BunDesk supports Bun 1.3.14.
+ * Once Bun 1.4.0 is stable and the minimum version becomes `>=1.4.0`, register
+ * `/second-instance` as a native route and remove this proxy-compatibility
+ * fallback.
  */
 export function withUnixIpc<WebSocketData = undefined, Routes extends string = string>(
   options: Bun.Serve.Options<WebSocketData, Routes>,
