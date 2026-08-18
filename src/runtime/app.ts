@@ -7,7 +7,8 @@ import type { PwaPolicyOptions } from './pwa-installation'
 import { installPwaInteractively, installPwaWithPolicy, removePwaInstallationPolicy } from './pwa-installation'
 import { readStickyPort, writeStickyPort, type StickyPortOptions } from './sticky-port'
 import { isBunHotMode, replaceHotRun } from './hot-reload'
-import { acquireSingleInstance } from './single-instance'
+import { acquireSingleInstance, createSecondInstanceFetch } from './single-instance'
+import { withUnixIpc } from './unix-server'
 import { cleanupAfterUpdate, createUpdater } from './updater'
 import {
   getLinuxIntegrationStatus,
@@ -112,6 +113,8 @@ export interface DesktopAppOptions<WebSocketData = undefined, Routes extends str
 export interface DesktopAppContext<WebSocketData = undefined> {
   server: Bun.Server<WebSocketData>
   url: URL
+  /** Unix socket path when `server.unix` is configured; undefined for TCP servers. */
+  unix?: string
   /** Resolved app environment ('development' | 'production'); CLI > BUNDESK_ENV > NODE_ENV > default. */
   env: AppEnvironment
   window: DesktopAppWindow | null
@@ -213,6 +216,15 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       }
       return this.options.onSecondInstance?.(event, context)
     }
+    const unixPath = 'unix' in this.options.server ? this.options.server.unix : undefined
+    if (unixPath && (parsed.port !== undefined || parsed.host !== undefined)) {
+      throw new Error('server.unix cannot be combined with --port or --host')
+    }
+    const opensWindow = this.options.window !== false && (this.options.window !== undefined || cliWindowProvider !== undefined)
+    if (unixPath && (opensWindow || isPwaCommand(parsed.command))) {
+      throw new Error('server.unix is headless; desktop windows and PWA commands require an HTTP URL')
+    }
+
 
     let instance: SingleInstanceResult | null = null
     if (this.options.singleInstance !== false) {
@@ -230,6 +242,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
           : undefined,
         cwd: process.cwd(),
         onSecondInstance,
+        unix: unixPath,
       })
       if (instance.kind === 'secondary') {
         // secondary 进程是"转发后即退出"，没有任何窗口/服务；不给用户提示
@@ -267,8 +280,10 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
     }
 
     const { stickyPort, ...configuredServerOptions } = this.options.server
-    const configuredPort = parsed.port ?? ('port' in configuredServerOptions ? configuredServerOptions.port : undefined)
-    const usesDynamicPort = configuredPort === undefined || configuredPort === 0
+    const configuredPort = unixPath
+      ? undefined
+      : parsed.port ?? ('port' in configuredServerOptions ? configuredServerOptions.port : undefined)
+    const usesDynamicPort = !unixPath && (configuredPort === undefined || configuredPort === 0)
     const stickyPortState = usesDynamicPort
       ? await readStickyPort(this.options.id, stickyPort)
       : { enabled: false, preferredPort: 0, recordPath: null }
@@ -276,31 +291,57 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       ...configuredServerOptions,
       // Mode fills the default only; an explicit user setting always wins.
       development: this.options.server.development ?? env === 'development',
-      hostname: parsed.host ?? ('hostname' in configuredServerOptions ? configuredServerOptions.hostname : undefined),
-      port: usesDynamicPort ? stickyPortState.preferredPort : configuredPort,
+      hostname: unixPath
+        ? undefined
+        : parsed.host ?? ('hostname' in configuredServerOptions ? configuredServerOptions.hostname : undefined),
+      port: unixPath ? undefined : usesDynamicPort ? stickyPortState.preferredPort : configuredPort,
     } as Bun.Serve.Options<WebSocketData, Routes>
+    const effectiveServerOptions = unixPath && instance?.kind === 'primary'
+      ? withUnixIpc(
+          serverOptions,
+          createSecondInstanceFetch({ token: instance.token, onSecondInstance }),
+        )
+      : serverOptions
     let server: Bun.Server<WebSocketData>
     try {
-      server = Bun.serve(serverOptions)
+      try {
+        server = Bun.serve(effectiveServerOptions)
+      } catch (error) {
+        if (!usesDynamicPort || stickyPortState.preferredPort === 0) throw error
+        console.warn(`[BunDesk] Port ${stickyPortState.preferredPort} is unavailable; selecting a new random port.`)
+        serverOptions.port = 0
+        server = Bun.serve(serverOptions)
+      }
     } catch (error) {
-      if (!usesDynamicPort || stickyPortState.preferredPort === 0) throw error
-      console.warn(`[BunDesk] Port ${stickyPortState.preferredPort} is unavailable; selecting a new random port.`)
-      serverOptions.port = 0
-      server = Bun.serve(serverOptions)
+      if (instance?.kind === 'primary') await instance.release()
+      throw error
+    }
+    if (unixPath && instance?.kind === 'primary') {
+      try {
+        await instance.publish()
+      } catch (error) {
+        await server.stop(true)
+        await instance.release()
+        throw error
+      }
     }
     if (usesDynamicPort) {
       await writeStickyPort(stickyPortState, server.port).catch((error) => {
         console.warn(`[BunDesk] Could not persist sticky port: ${error instanceof Error ? error.message : String(error)}`)
       })
     }
-    const protocol = 'tls' in serverOptions && serverOptions.tls ? 'https' : 'http'
-    const configuredHost = 'hostname' in serverOptions ? serverOptions.hostname : undefined
+    const protocol = 'tls' in effectiveServerOptions && effectiveServerOptions.tls ? 'https' : 'http'
+    const configuredHost = 'hostname' in effectiveServerOptions ? effectiveServerOptions.hostname : undefined
     const urlHost = !configuredHost || configuredHost === '0.0.0.0'
       ? '127.0.0.1'
       : configuredHost === '::'
         ? '[::1]'
         : configuredHost
-    const appUrl = new URL(`${protocol}://${urlHost}:${server.port}`)
+    // Unix listeners have no browser-loadable URL. `context.unix` is the
+    // actual endpoint; this explicit custom scheme prevents accidental fetch.
+    const appUrl = unixPath
+      ? new URL('http+unix://localhost/')
+      : new URL(`${protocol}://${urlHost}:${server.port}`)
     const windowOptions = this.options.window === false
       ? null
       : this.options.window ?? (cliWindowProvider ? { provider: cliWindowProvider } : null)
@@ -369,6 +410,7 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       kind: 'primary',
       server,
       url: appUrl,
+      unix: unixPath,
       env,
       window: appWindow,
       windowProvider: cliWindowProvider ?? windowOptions?.provider ?? null,

@@ -312,6 +312,41 @@ server: {
 }
 ```
 
+### Unix socket mode
+
+Set `server.unix` to run headlessly without a TCP listener. `server.port`,
+`server.hostname`, sticky ports, and CLI `--port`/`--host` do not apply. Window
+and PWA providers require a browser-loadable HTTP origin, so leave `window`
+unset or set `window: false`:
+```ts
+const app = createDesktopApp({
+  id: 'my-company.headless-app',
+  server: {
+    unix: '/run/my-app.sock',
+    fetch: () => Response.json({ ok: true }),
+  },
+  window: false,
+  singleInstance: {},
+})
+
+const session = await app.start()
+const response = await fetch('http://localhost/status', { unix: session.unix })
+```
+
+`context.unix` is the real endpoint; `context.url` uses the descriptive
+`http+unix:` scheme and is intentionally not fetchable. With single-instance
+mode enabled, secondary launches use `POST /second-instance` on this same
+socket, including bearer-token authentication, so BunDesk opens no auxiliary
+loopback TCP listener.
+
+Bun's native `routes` table—including imported HTML bundles—works on unix
+listeners. Bun 1.3.14 has one client-side edge case: when `HTTP_PROXY` or
+`HTTPS_PROXY` is set, `fetch(url, { unix })` emits a proxy-style absolute-form
+request target, which uWebSockets' path router does not match. Add
+`NO_PROXY=localhost,127.0.0.1` (or use another origin-form Unix HTTP client).
+BunDesk's own single-instance IPC handles this case through its authenticated
+fallback route.
+
 ## Fullstack pages (HTML imports)
 
 Bun's bundler can serve a full frontend pipeline directly from HTML files:

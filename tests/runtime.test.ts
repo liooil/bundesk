@@ -36,6 +36,30 @@ import type { DesktopAppSession, LinuxIntegrationOptions, SecondInstanceEvent } 
 
 const temporaryDirectories: string[] = []
 
+async function requestUnix(socketPath: string, path: string, method = 'GET'): Promise<{ status: number; body: string }> {
+  const { promise, resolve, reject } = Promise.withResolvers<{ status: number; body: string }>()
+  let raw = ''
+  void Bun.connect({
+    unix: socketPath,
+    socket: {
+      open(socket) {
+        socket.write(`${method} ${path} HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`)
+      },
+      data(_socket, data) {
+        raw += new TextDecoder().decode(data)
+      },
+      close() {
+        const [headers = '', body = ''] = raw.split('\r\n\r\n', 2)
+        resolve({ status: Number(headers.split(' ')[1]), body })
+      },
+      error(_socket, error) {
+        reject(error)
+      },
+    },
+  }).catch(reject)
+  return promise
+}
+
 afterAll(async () => {
   await Promise.all(temporaryDirectories.map((path) => rm(path, { recursive: true, force: true })))
 })
@@ -291,6 +315,102 @@ describe('desktop runtime', () => {
     expect(await fetch(result.url).then((response) => response.text())).toBe('runtime-ok')
     await result.stop()
     expect(result.server.pendingRequests).toBe(0)
+  })
+
+  it('serves routes over a unix socket without binding a TCP port', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'bundesk-unix-server-'))
+    temporaryDirectories.push(directory)
+    const socketPath = join(directory, 'app.sock')
+    const app = createDesktopApp({
+      id: `runtime-unix-server-${process.pid}`,
+      server: {
+        unix: socketPath,
+        routes: {
+          '/static': new Response('static-ok'),
+          '/items/:id': {
+            POST: (request: Request) => Response.json({
+              id: (request as Request & { params: Record<string, string> }).params.id,
+            }),
+          },
+        },
+      },
+      window: false,
+      singleInstance: false,
+    })
+
+    const session = await app.start([])
+    expect(session.kind).toBe('primary')
+    if (session.kind !== 'primary') throw new Error('Expected a primary session')
+    expect(session.unix).toBe(socketPath)
+    expect(session.server.port).toBeUndefined()
+    expect(session.url.protocol).toBe('http+unix:')
+    expect((await requestUnix(socketPath, '/static')).body).toBe('static-ok')
+    expect(JSON.parse((await requestUnix(socketPath, '/items/42', 'POST')).body)).toEqual({ id: '42' })
+    expect((await requestUnix(socketPath, '/missing')).status).toBe(404)
+    await session.stop()
+  })
+
+  it('forwards single-instance IPC through the app unix socket', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'bundesk-unix-ipc-'))
+    temporaryDirectories.push(directory)
+    const socketPath = join(directory, 'app.sock')
+    const dataDirectory = join(directory, 'instance')
+    let received: SecondInstanceEvent | undefined
+    const appId = `runtime-unix-ipc-${process.pid}`
+    const primary = await createDesktopApp({
+      id: appId,
+      server: { unix: socketPath, fetch: () => new Response('app-ok') },
+      window: false,
+      singleInstance: { dataDirectory },
+      onSecondInstance(event) {
+        received = event
+      },
+    }).start([])
+    expect(primary.kind).toBe('primary')
+    if (primary.kind !== 'primary') throw new Error('Expected a primary session')
+
+    const record = JSON.parse(await readFile(join(dataDirectory, 'instance.json'), 'utf8')) as { unix?: string; port?: number }
+    expect(record.unix).toBe(socketPath)
+    expect(record.port).toBeUndefined()
+    const unauthorized = await fetch('http://localhost/second-instance', {
+      method: 'POST',
+      unix: socketPath,
+      body: JSON.stringify({ argv: [], cwd: process.cwd(), pid: process.pid, receivedAt: new Date().toISOString() }),
+    })
+    expect(unauthorized.status).toBe(401)
+
+    const secondary = await createDesktopApp({
+      id: appId,
+      server: { unix: socketPath, fetch: () => new Response('unused') },
+      window: false,
+      singleInstance: { dataDirectory },
+    }).start(['sample.demo'])
+    expect(secondary).toEqual(expect.objectContaining({
+      kind: 'secondary',
+      accepted: true,
+    }))
+    expect(received?.argv).toEqual(['sample.demo'])
+    expect(received?.cwd).toBe(process.cwd())
+    await primary.stop()
+  })
+
+  it('rejects TCP overrides and window launch in unix mode', async () => {
+    const socketPath = join(tmpdir(), `bundesk-unix-invalid-${process.pid}.sock`)
+    const headless = createDesktopApp({
+      id: `runtime-unix-invalid-${process.pid}`,
+      server: { unix: socketPath, fetch: () => new Response('unused') },
+      window: false,
+      singleInstance: false,
+    })
+    await expect(headless.start(['--port', '12345'])).rejects.toThrow('cannot be combined')
+
+    const windowed = createDesktopApp({
+      id: `runtime-unix-window-${process.pid}`,
+      server: { unix: socketPath, fetch: () => new Response('unused') },
+      window: { provider: 'chromium-app' },
+      singleInstance: false,
+    })
+    await expect(windowed.start([])).rejects.toThrow('headless')
   })
 
   it('reuses the last dynamic port and falls back when it is unavailable', async () => {

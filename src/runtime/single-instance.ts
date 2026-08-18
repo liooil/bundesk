@@ -20,11 +20,20 @@ export interface AcquireSingleInstanceOptions {
   timeoutMs?: number
   /** Maximum time to wait for the primary handler's response. Defaults to 1.5 seconds. */
   responseTimeoutMs?: number
+  /**
+   * Forward secondary launches through the app's own unix socket instead of
+   * opening a separate loopback TCP listener.
+   */
+  unix?: string
 }
 
 export interface PrimaryInstance {
   kind: 'primary'
   dataDirectory: string
+  /** Bearer token required by the `/second-instance` IPC endpoint. */
+  token: string
+  /** Publish the unix endpoint after the app server is listening; TCP mode is already published. */
+  publish(): Promise<void>
   release(): Promise<void>
 }
 
@@ -41,7 +50,8 @@ export type SingleInstanceResult = PrimaryInstance | ForwardedInstance
 interface InstanceRecord {
   appId: string
   pid: number
-  port: number
+  port?: number
+  unix?: string
   token: string
   createdAt: string
 }
@@ -73,6 +83,7 @@ export async function acquireSingleInstance(options: AcquireSingleInstanceOption
         lockPath,
         lock,
         onSecondInstance: options.onSecondInstance,
+        unix: options.unix,
       })
     } catch (error) {
       if (lock) await lock.close().catch(() => undefined)
@@ -107,6 +118,41 @@ export async function acquireSingleInstance(options: AcquireSingleInstanceOption
   throw new SingleInstanceUnavailableError(appId)
 }
 
+/** True for the token-authenticated secondary-launch endpoint. */
+export function isSecondInstanceRequest(request: Request): boolean {
+  return request.method === 'POST' && new URL(request.url).pathname === '/second-instance'
+}
+
+/** Fetch handler shared by the standalone TCP IPC server and the app's unix socket. */
+export function createSecondInstanceFetch(options: {
+  token: string
+  onSecondInstance?: (event: SecondInstanceEvent) => void | Promise<unknown>
+}): (request: Request) => Promise<Response> {
+  return async (request) => {
+    if (!isSecondInstanceRequest(request)) return new Response('Not found', { status: 404 })
+    if (request.headers.get('authorization') !== `Bearer ${options.token}`) {
+      return new Response('Unauthorized', { status: 401 })
+    }
+    const declaredSize = Number.parseInt(request.headers.get('content-length') ?? '0', 10)
+    if (declaredSize > 1024 * 1024) return new Response('Payload too large', { status: 413 })
+
+    let event: SecondInstanceEvent
+    try {
+      event = validateSecondInstanceEvent(await request.json())
+    } catch (error) {
+      return new Response(error instanceof Error ? error.message : 'Invalid payload', { status: 400 })
+    }
+
+    try {
+      const result = await options.onSecondInstance?.(event)
+      return Response.json(result === undefined ? { accepted: true } : { accepted: true, result })
+    } catch (error) {
+      console.error('[BunDesk] onSecondInstance failed:', error)
+      return Response.json({ accepted: false }, { status: 500 })
+    }
+  }
+}
+
 async function startPrimaryInstance(options: {
   appId: string
   dataDirectory: string
@@ -114,63 +160,55 @@ async function startPrimaryInstance(options: {
   lockPath: string
   lock: FileHandle
   onSecondInstance?: (event: SecondInstanceEvent) => void | Promise<unknown>
+  unix?: string
 }): Promise<PrimaryInstance> {
   const token = randomBytes(32).toString('hex')
-  const server = Bun.serve({
-    hostname: '127.0.0.1',
-    port: 0,
-    async fetch(request) {
-      const url = new URL(request.url)
-      if (url.pathname !== '/second-instance' || request.method !== 'POST') {
-        return new Response('Not found', { status: 404 })
-      }
-      if (request.headers.get('authorization') !== `Bearer ${token}`) {
-        return new Response('Unauthorized', { status: 401 })
-      }
-      const declaredSize = Number.parseInt(request.headers.get('content-length') ?? '0', 10)
-      if (declaredSize > 1024 * 1024) return new Response('Payload too large', { status: 413 })
-
-      let event: SecondInstanceEvent
-      try {
-        event = validateSecondInstanceEvent(await request.json())
-      } catch (error) {
-        return new Response(error instanceof Error ? error.message : 'Invalid payload', { status: 400 })
-      }
-
-      try {
-        const result = await options.onSecondInstance?.(event)
-        return Response.json(result === undefined ? { accepted: true } : { accepted: true, result })
-      } catch (error) {
-        console.error('[BunDesk] onSecondInstance failed:', error)
-        return Response.json({ accepted: false }, { status: 500 })
-      }
-    },
-  })
-  if (server.port === undefined) {
-    await server.stop(true)
-    await options.lock.close()
-    await rm(options.lockPath, { force: true })
-    throw new Error('Single-instance IPC server did not bind a TCP port')
+  const writeRecord = async (record: InstanceRecord) => {
+    await writeFile(options.recordPath, JSON.stringify(record), { encoding: 'utf8', mode: 0o600 })
+    await chmod(options.recordPath, 0o600).catch(() => undefined)
   }
 
-  const record: InstanceRecord = {
-    appId: options.appId,
-    pid: process.pid,
-    port: server.port,
-    token,
-    createdAt: new Date().toISOString(),
+  let server: Bun.Server<undefined> | undefined
+  if (!options.unix) {
+    server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: createSecondInstanceFetch({ token, onSecondInstance: options.onSecondInstance }),
+    })
+    if (server.port === undefined) {
+      await server.stop(true)
+      await options.lock.close()
+      await rm(options.lockPath, { force: true })
+      throw new Error('Single-instance IPC server did not bind a TCP port')
+    }
+    await writeRecord({
+      appId: options.appId,
+      pid: process.pid,
+      port: server.port,
+      token,
+      createdAt: new Date().toISOString(),
+    })
   }
-  await writeFile(options.recordPath, JSON.stringify(record), { encoding: 'utf8', mode: 0o600 })
-  await chmod(options.recordPath, 0o600).catch(() => undefined)
 
   let released = false
   return {
     kind: 'primary',
     dataDirectory: options.dataDirectory,
+    token,
+    async publish() {
+      if (!options.unix) return
+      await writeRecord({
+        appId: options.appId,
+        pid: process.pid,
+        unix: options.unix,
+        token,
+        createdAt: new Date().toISOString(),
+      })
+    },
     async release() {
       if (released) return
       released = true
-      await server.stop(true)
+      if (server) await server.stop(true)
       await options.lock.close()
       await Promise.all([
         rm(options.recordPath, { force: true }),
@@ -186,7 +224,7 @@ async function readInstanceRecord(path: string): Promise<InstanceRecord | null> 
     if (
       typeof value.appId !== 'string' ||
       !Number.isInteger(value.pid) ||
-      !Number.isInteger(value.port) ||
+      (!Number.isInteger(value.port) && !(typeof value.unix === 'string' && value.unix.length > 0)) ||
       typeof value.token !== 'string' ||
       value.token.length < 32 ||
       typeof value.createdAt !== 'string'
@@ -203,15 +241,19 @@ async function forwardLaunch(
   responseTimeoutMs = 1_500,
 ): Promise<ForwardedInstance | null> {
   try {
-    const response = await fetch(`http://127.0.0.1:${record.port}/second-instance`, {
-      method: 'POST',
-      headers: {
-        authorization: `Bearer ${record.token}`,
-        'content-type': 'application/json',
+    const response = await fetch(
+      record.unix ? 'http://localhost/second-instance' : `http://127.0.0.1:${record.port}/second-instance`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${record.token}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(event),
+        signal: AbortSignal.timeout(responseTimeoutMs),
+        ...(record.unix ? { unix: record.unix } : {}),
       },
-      body: JSON.stringify(event),
-      signal: AbortSignal.timeout(responseTimeoutMs),
-    })
+    )
     if (response.status === 401 || response.status === 404) return null
     const payload = await response.json().catch(() => null) as { accepted?: boolean; result?: unknown } | null
     return {

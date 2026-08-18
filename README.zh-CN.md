@@ -272,6 +272,40 @@ server: {
 }
 ```
 
+### Unix socket 模式
+
+设置 `server.unix` 可在完全无 TCP listener 的情况下以无头模式运行。
+`server.port`、`server.hostname`、粘性端口及命令行 `--port`/`--host` 均不适用。
+窗口和 PWA provider 需要浏览器可加载的 HTTP origin，因此应不配置 `window`，
+或显式设置 `window: false`：
+
+```ts
+const app = createDesktopApp({
+  id: 'my-company.headless-app',
+  server: {
+    unix: '/run/my-app.sock',
+    fetch: () => Response.json({ ok: true }),
+  },
+  window: false,
+  singleInstance: {},
+})
+
+const session = await app.start()
+const response = await fetch('http://localhost/status', { unix: session.unix })
+```
+
+`context.unix` 是真实端点；`context.url` 使用描述性的 `http+unix:` scheme，
+刻意不可直接 fetch。启用 single-instance 后，二次启动会通过同一个 socket 的
+`POST /second-instance` 转发，并保留 bearer-token 鉴权；BunDesk 不再另开
+loopback TCP listener。
+
+Bun 原生 `routes`（包括 HTML import bundle）可正常用于 unix listener。
+Bun 1.3.14 有一个客户端边界问题：设置 `HTTP_PROXY` 或 `HTTPS_PROXY` 后，
+`fetch(url, { unix })` 会发出代理格式的 absolute-form request target，
+uWebSockets 的路径 router 无法匹配。应设置
+`NO_PROXY=localhost,127.0.0.1`，或改用发送 origin-form 的 Unix HTTP 客户端。
+BunDesk 自身的 single-instance IPC 会通过带鉴权的 fallback route 自动处理该情况。
+
 ## 全栈页面（HTML imports）
 
 Bun 的打包器可以直接从 HTML 文件提供完整前端管线：import 一个 `.html` 文件并作为路由传入——Bun 会自动打包其中所有 `<script>` 与 `<link>` 标签（TypeScript/TSX/JSX/CSS），把标记重写为哈希资源 URL 并提供。
