@@ -94,6 +94,7 @@ jobs:
     env:
       PACKAGE_VERSION: ${{ github.ref_name }}
     steps:
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           name: release-bundesk
@@ -110,7 +111,20 @@ jobs:
           if npm view "bundesk@$version" version >/dev/null 2>&1; then
             echo "bundesk@$version is already published; skipping"
           else
-            npm publish artifacts/bundesk.tgz --provenance
+            for attempt in 1 2 3; do
+              if npm publish artifacts/bundesk.tgz --provenance --access public; then
+                exit 0
+              fi
+              if npm view "bundesk@$version" version >/dev/null 2>&1; then
+                echo "bundesk@$version was accepted despite the publish client error"
+                exit 0
+              fi
+              if [ "$attempt" -lt 3 ]; then
+                echo "Publish attempt $attempt failed; retrying"
+                sleep $((attempt * 10))
+              fi
+            done
+            exit 1
           fi
 
   # Single release asset upload so the release is created exactly once, after
