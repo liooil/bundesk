@@ -37,7 +37,7 @@ declare const __EXAMPLE_APP_VERSION__: string
 const APP_ID = 'com.bundesk.example-app'
 const VERSION = typeof __EXAMPLE_APP_VERSION__ === 'string'
   ? __EXAMPLE_APP_VERSION__
-  : (process.env.BUNDESK_EXAMPLE_VERSION ?? '0.3.0').replace(/^v/, '') + '-dev'
+  : (process.env.BUNDESK_EXAMPLE_VERSION ?? '0.4.0').replace(/^v/, '') + '-dev'
 const PWA_APP_ID = 'abcdefghijklmnopabcdefghijklmnop'
 const PLAYGROUND_PORT = readPlaygroundPort()
 const PLAYGROUND_DATA_DIRECTORY = process.env.BUNDESK_EXAMPLE_DATA_DIR ?? getAppDataDirectory(APP_ID)

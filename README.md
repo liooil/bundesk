@@ -82,7 +82,7 @@ The package name `bundesk` is used directly with Bun:
 import { createDesktopApp, defineConfig } from 'bundesk'
 ```
 
-Requires Bun 1.3.14 or newer.
+Requires Bun 1.4.0 or newer.
 
 ## Runtime quick start
 
@@ -340,12 +340,10 @@ socket, including bearer-token authentication, so BunDesk opens no auxiliary
 loopback TCP listener.
 
 Bun's native `routes` table—including imported HTML bundles—works on unix
-listeners. Bun 1.3.14 has one client-side edge case: when `HTTP_PROXY` or
-`HTTPS_PROXY` is set, `fetch(url, { unix })` emits a proxy-style absolute-form
-request target, which uWebSockets' path router does not match. Add
-`NO_PROXY=localhost,127.0.0.1` (or use another origin-form Unix HTTP client).
-BunDesk's own single-instance IPC handles this case through its authenticated
-fallback route.
+listeners. Bun 1.4 also routes Unix-socket requests correctly when
+`HTTP_PROXY` or `HTTPS_PROXY` causes `fetch(url, { unix })` to emit an
+absolute-form request target. BunDesk's authenticated single-instance IPC is
+registered in that same native routes table.
 
 ## Fullstack pages (HTML imports)
 
@@ -428,9 +426,9 @@ The static plugin must be loaded through `[serve.static]`; dynamically calling
 does not expose the native `onBeforeParse` hook required by the Tailwind
 plugin. Also verify the generated CSS before removing an existing Tailwind CLI
 pipeline: plugin releases can embed a different Tailwind compiler version. In
-our Bun 1.3.14 check, `bun-plugin-tailwind@0.1.2` emitted a Tailwind 4.1.14
-banner even with `tailwindcss@4.3.3` installed. Keep the CLI watcher when exact
-compiler-version parity is required.
+an earlier Bun 1.3.14 check, `bun-plugin-tailwind@0.1.2` emitted a Tailwind
+4.1.14 banner even with `tailwindcss@4.3.3` installed. Keep the CLI watcher
+when exact compiler-version parity is required.
 
 See [Bun's Tailwind plugin documentation](https://bun.sh/docs/bundler/fullstack#tailwindcss-plugin)
 and [`bun-plugin-tailwind`](https://www.npmjs.com/package/bun-plugin-tailwind).
@@ -449,7 +447,7 @@ server uses.
 | Hot module reload | ✅ (WebSocket runtime woven into the client) | ❌ |
 | Error details | detailed | minimal |
 
-Verified on bun 1.3.14: dev responses carry `sourceMappingURL` and the HMR
+Verified on Bun 1.4.0: dev responses carry `sourceMappingURL` and the HMR
 client; a compiled single binary serves `chunk-<hash>.js/css` minified.
 
 ### The dev loop

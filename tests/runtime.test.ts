@@ -359,7 +359,11 @@ describe('desktop runtime', () => {
     const appId = `runtime-unix-ipc-${process.pid}`
     const primary = await createDesktopApp({
       id: appId,
-      server: { unix: socketPath, fetch: () => new Response('app-ok') },
+      server: {
+        unix: socketPath,
+        routes: { '/app-route': new Response('route-ok') },
+        fetch: () => new Response('fallback-ok'),
+      },
       window: false,
       singleInstance: { dataDirectory },
       onSecondInstance(event) {
@@ -372,6 +376,9 @@ describe('desktop runtime', () => {
     const record = JSON.parse(await readFile(join(dataDirectory, 'instance.json'), 'utf8')) as { unix?: string; port?: number }
     expect(record.unix).toBe(socketPath)
     expect(record.port).toBeUndefined()
+    expect((await requestUnix(socketPath, '/app-route')).body).toBe('route-ok')
+    expect((await requestUnix(socketPath, 'http://localhost/app-route')).body).toBe('route-ok')
+    expect((await requestUnix(socketPath, '/fallback')).body).toBe('fallback-ok')
     const unauthorized = await fetch('http://localhost/second-instance', {
       method: 'POST',
       unix: socketPath,

@@ -82,7 +82,7 @@ bun add -d bundesk
 import { createDesktopApp, defineConfig } from 'bundesk'
 ```
 
-要求 Bun 1.3.14 或更新版本。
+要求 Bun 1.4.0 或更新版本。
 
 ## 运行时快速开始
 
@@ -300,11 +300,9 @@ const response = await fetch('http://localhost/status', { unix: session.unix })
 loopback TCP listener。
 
 Bun 原生 `routes`（包括 HTML import bundle）可正常用于 unix listener。
-Bun 1.3.14 有一个客户端边界问题：设置 `HTTP_PROXY` 或 `HTTPS_PROXY` 后，
-`fetch(url, { unix })` 会发出代理格式的 absolute-form request target，
-uWebSockets 的路径 router 无法匹配。应设置
-`NO_PROXY=localhost,127.0.0.1`，或改用发送 origin-form 的 Unix HTTP 客户端。
-BunDesk 自身的 single-instance IPC 会通过带鉴权的 fallback route 自动处理该情况。
+Bun 1.4 也能正确路由 Unix socket 请求，即使设置 `HTTP_PROXY` 或
+`HTTPS_PROXY` 导致 `fetch(url, { unix })` 发出 absolute-form request target。
+BunDesk 带鉴权的 single-instance IPC 会注册在同一个原生 routes table 中。
 
 ## 全栈页面（HTML imports）
 
@@ -372,7 +370,7 @@ export default defineConfig({
 
 开发脚本随后可直接运行应用（`bun src/main.ts`）：Bun 会随 HTML route 重新生成 Tailwind CSS，并通过 HMR 更新已打开的页面，不再需要提交生成后的 CSS，也不需要单独运行 `tailwindcss --watch`。
 
-静态插件必须通过 `[serve.static]` 加载；动态调用 `Bun.plugin(tailwind)` 并不等价，因为 runtime plugin builder 没有 Tailwind 插件需要的原生 `onBeforeParse` hook。删除已有 Tailwind CLI 管线前还应对比生成结果：插件发行版可能内嵌不同版本的 Tailwind 编译器。实测 Bun 1.3.14 下，即使安装了 `tailwindcss@4.3.3`，`bun-plugin-tailwind@0.1.2` 仍生成带 Tailwind 4.1.14 banner 的 CSS；若必须与指定编译器版本完全一致，应继续使用 CLI watcher。
+静态插件必须通过 `[serve.static]` 加载；动态调用 `Bun.plugin(tailwind)` 并不等价，因为 runtime plugin builder 没有 Tailwind 插件需要的原生 `onBeforeParse` hook。删除已有 Tailwind CLI 管线前还应对比生成结果：插件发行版可能内嵌不同版本的 Tailwind 编译器。此前在 Bun 1.3.14 下实测，即使安装了 `tailwindcss@4.3.3`，`bun-plugin-tailwind@0.1.2` 仍生成带 Tailwind 4.1.14 banner 的 CSS；若必须与指定编译器版本完全一致，应继续使用 CLI watcher。
 
 参见 [Bun Tailwind 插件文档](https://bun.sh/docs/bundler/fullstack#tailwindcss-plugin)和 [`bun-plugin-tailwind`](https://www.npmjs.com/package/bun-plugin-tailwind)。
 
@@ -388,7 +386,7 @@ export default defineConfig({
 | 热模块替换 | ✅（WebSocket 运行时织入客户端） | ❌ |
 | 错误详情 | 详细 | 精简 |
 
-已在 bun 1.3.14 实测：dev 响应带 `sourceMappingURL` 与 HMR 客户端；编译单二进制输出压缩后的 `chunk-<hash>.js/css`。
+已在 Bun 1.4.0 实测：dev 响应带 `sourceMappingURL` 与 HMR 客户端；编译单二进制输出压缩后的 `chunk-<hash>.js/css`。
 
 ### 开发循环
 
