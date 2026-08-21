@@ -112,7 +112,7 @@ jobs:
             echo "bundesk@$version is already published; skipping"
           else
             for attempt in 1 2 3; do
-              if npm publish artifacts/bundesk.tgz --provenance --access public; then
+              if npm publish ./artifacts/bundesk.tgz --provenance --access public; then
                 exit 0
               fi
               if npm view "bundesk@$version" version >/dev/null 2>&1; then
