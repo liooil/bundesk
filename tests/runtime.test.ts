@@ -323,6 +323,26 @@ describe('desktop runtime', () => {
     expect(result.server.pendingRequests).toBe(0)
   })
 
+  it('removes termination listeners when a session stops', async () => {
+    const beforeSigint = process.listenerCount('SIGINT')
+    const beforeSigterm = process.listenerCount('SIGTERM')
+    const app = createDesktopApp({
+      id: `runtime-signal-cleanup-${process.pid}`,
+      server: { port: 0, stickyPort: false, fetch: () => new Response('ok') },
+      window: false,
+      singleInstance: false,
+    })
+    const session = await app.start([])
+    if (session.kind !== 'primary') throw new Error('Expected a primary session')
+    const waiting = session.wait()
+    expect(process.listenerCount('SIGINT')).toBe(beforeSigint + 1)
+    expect(process.listenerCount('SIGTERM')).toBe(beforeSigterm + 1)
+    await session.stop()
+    await waiting
+    expect(process.listenerCount('SIGINT')).toBe(beforeSigint)
+    expect(process.listenerCount('SIGTERM')).toBe(beforeSigterm)
+  })
+
   it('serves routes over a unix socket without binding a TCP port', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'bundesk-unix-server-'))
     temporaryDirectories.push(directory)
@@ -1195,8 +1215,15 @@ describe('bun --hot runtime', () => {
       const updated = await fetch(`http://127.0.0.1:${port}`).then((response) => response.text())
       expect(updated).toMatch(/^\d+:two$/)
       expect(await readFile(eventsPath, 'utf8')).toContain('ready:')
+
+      child.kill(2)
+      const exitCode = await Promise.race([
+        child.exited,
+        Bun.sleep(5_000).then(() => null),
+      ])
+      expect(exitCode).not.toBeNull()
     } finally {
-      child.kill(9)
+      if (child.exitCode === null) child.kill(9)
       await child.exited
     }
   }, 20_000)

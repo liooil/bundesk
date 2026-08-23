@@ -129,7 +129,12 @@ export interface DesktopAppContext<WebSocketData = undefined> {
 
 export interface DesktopAppSession<WebSocketData = undefined> extends DesktopAppContext<WebSocketData> {
   kind: 'primary'
-  wait(): Promise<void>
+  wait(options?: DesktopAppWaitOptions): Promise<void>
+}
+
+export interface DesktopAppWaitOptions {
+  /** Let an outer runtime own SIGINT/SIGTERM handling. Defaults to true. */
+  handleSignals?: boolean
 }
 
 export type DesktopAppStartResult<WebSocketData = undefined> =
@@ -391,16 +396,17 @@ export class DesktopApp<WebSocketData = undefined, Routes extends string = strin
       await server.stop(true)
       if (instance?.kind === 'primary') await instance.release()
     }
-    const wait = async () => {
-      const signal = waitForTerminationSignal()
+    const wait = async (waitOptions: DesktopAppWaitOptions = {}) => {
+      const signal = waitOptions.handleSignals === false ? null : waitForTerminationSignal()
+      const termination = signal ? [signal.promise] : []
       // With a tray, closing an observable window keeps the app alive unless
       // exitWithWindow is explicitly enabled.
       if (appWindow?.closed && exitWithCurrentWindow) {
-        await Promise.race([appWindow.closed.then(() => undefined), signal.promise, stoppedPromise])
+        await Promise.race([appWindow.closed.then(() => undefined), ...termination, stoppedPromise])
       } else {
-        await Promise.race([signal.promise, stoppedPromise])
+        await Promise.race([...termination, stoppedPromise])
       }
-      signal.dispose()
+      signal?.dispose()
       await stop()
     }
 
@@ -713,19 +719,26 @@ function parsePort(value: string | undefined): number {
 }
 
 function waitForTerminationSignal(): { promise: Promise<void>; dispose(): void } {
-  const controller = new AbortController()
+  const listeners: Array<{ signal: 'SIGINT' | 'SIGTERM'; listener: () => void }> = []
+  let disposed = false
+  const dispose = () => {
+    if (disposed) return
+    disposed = true
+    for (const { signal, listener } of listeners) process.off(signal, listener)
+    listeners.length = 0
+  }
   const promise = new Promise<void>((resolve) => {
     for (const signal of ['SIGINT', 'SIGTERM'] as const) {
-      process.once(signal, () => {
-        controller.abort()
+      const listener = () => {
+        dispose()
         resolve()
-      })
+      }
+      listeners.push({ signal, listener })
+      process.once(signal, listener)
     }
   })
   return {
     promise,
-    dispose() {
-      controller.abort()
-    },
+    dispose,
   }
 }
