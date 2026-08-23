@@ -2,7 +2,7 @@
 
 > **English** · [中文](README.zh-CN.md)
 
-**用 Bun 和系统浏览器，把本地 Web 应用变成启动快、构建快、容易调试的桌面应用。**
+**用 Bun 和系统 WebView/浏览器，把本地 Web 应用变成启动快、构建快、容易调试的桌面应用。**
 
 BunDesk 是一个面向 Bun 的桌面应用框架，而不只是 EXE 打包脚本。名称由 **Bun + Desktop** 组成。框架统一处理 HTTP server、浏览器窗口、单实例、自动升级、Windows 文件关联与开始菜单集成，同时保留底层组合式 API。
 
@@ -36,14 +36,14 @@ BunDesk 将 Bun runtime、server 和由入口导入的前端资源编进同一�
 
 ### 不附带 Chromium
 
-运行时优先使用系统已安装的 Microsoft Edge、Google Chrome 或 Chromium，并以 `--app=<url>` 打开独立应用窗口；未找到时使用隔离且可跟踪的 profile 启动 Firefox，最后才回退到系统 URL opener。每次选择或失败都会输出日志。收益是更小的发布物、更少的 renderer 更新负担和更短的打包链路。
+应用显式配置窗口 provider：可选择 Windows WebView2、Linux WebKitGTK、macOS WKWebView 等系统内置/安装的 WebView，也可以用 Edge、Chrome 或 Chromium 的 `--app=<url>` 独立窗口、隔离 Firefox 窗口或系统 URL opener。fallback 顺序同样由应用配置，每次尝试或失败都会输出日志。收益是更小的发布物、更少的 renderer 更新负担和更短的打包链路。
 
 ## 与 Electron / Tauri 的定位
 
 | | BunDesk | Electron | Tauri |
 | --- | --- | --- | --- |
 | 应用后端 | Bun | Node.js | Rust + 可选 sidecar |
-| Renderer | 系统 Edge/Chrome/Chromium | 随应用附带 Chromium | 系统 WebView |
+| Renderer | 系统 WebView 或 Edge/Chrome/Firefox | 随应用附带 Chromium | 系统 WebView |
 | 正式构建主链路 | Bun bundle + compile | JS bundle + Electron packaging | 前端构建 + Rust/native compile |
 | Linux 构建 Windows 单文件 EXE | 支持 | 依赖目标打包配置 | 通常需要额外交叉工具链 |
 | 调试 | Bun + 浏览器 DevTools | Electron DevTools | WebView DevTools + Rust 调试 |
@@ -55,6 +55,7 @@ BunDesk 适合“本地 HTTP 服务 + Web UI”的工具型桌面应用。需要
 
 - `createDesktopApp(...)` 一体化托管 server、窗口和生命周期；
 - `openDesktopWindow(...)` 等组合式底层 API；
+- Windows WebView2、Linux WebKitGTK 和 macOS WKWebView 进程内窗口；
 - Edge/Chrome/Chromium `--app=<url>` 独立窗口（macOS 含 Brave），Termux 走 Android VIEW intent；
 - 带随机 256-bit token 的 loopback IPC 单实例；
 - 次实例把 `argv`、`cwd` 和 PID 转发给主实例回调；
@@ -183,7 +184,7 @@ my-app upgrade [--force]       检查、安装升级并重启
 [`example-app/`](example-app/) 是一个交互式 playground，在一个可运行应用里配置 BunDesk 的全部功能（不随 npm 包发布）。页面本身是 fullstack 路由，并链接了各功能的实时 JSON 端点：
 
 - **全栈页面**（HTML import——开发时热更新，编译产物 AOT），并提供 PWA manifest、service worker 和运行时生成的 PNG 图标
-- 应用自行定义的**窗口 provider 策略**：Windows 为 `webview2` → Chromium → Firefox，Linux 为 `webkitgtk` → Chromium → Firefox，macOS 为 Chromium → Firefox；同时支持 `--provider` 固定任意具体 provider
+- 应用自行定义的**窗口 provider 策略**：Windows 为 `webview2` → Chromium → Firefox，Linux 为 `webkitgtk` → Chromium → Firefox，macOS 为 `wkwebview` → Chromium → Firefox；同时支持 `--provider` 固定任意具体 provider
 - 组合式 API 提供的 **provider matrix 和窗口句柄事实**（`/api/providers`）
 - **PWA 安装**：`install-pwa`、`install-pwa --policy`、`remove-pwa-policy` 和 `chromium-pwa` 窗口
 - **单实例**：次实例的 `argv`、`cwd`、PID 转发到主实例回调，并记录在页面中、重新打开窗口
@@ -684,18 +685,23 @@ primary provider、fallback provider、顺序及允许 fallback 的失败类别�
 | --- | --- | --- |
 | `webview2` | Windows 进程内 WebView2 | 能 |
 | `webkitgtk` | Linux 进程内 WebKitGTK | 能 |
+| `wkwebview` | macOS 进程内 WKWebView | 能 |
 | `chromium-app` | 隔离 Chromium `--app=<url>` 进程 | 能，针对受管进程 |
 | `chromium-pwa` | 已安装 Chromium app id | 不能；进程可能只是 launcher |
 | `firefox-window` | 隔离 Firefox profile/window 进程 | 能，针对受管进程 |
 | `system-browser` | 系统 URL opener | 不能 |
 | `android-view-intent` | Termux Android VIEW intent | 不能；进程只是 dispatcher |
 
-`webview2` 和 `webkitgtk` 提供 `navigate`、`executeScript`、`postMessage`、
+`webview2`、`webkitgtk` 和 `wkwebview` 提供 `navigate`、`executeScript`、`postMessage`、
 导航就绪和 page-to-host 消息。页面必须返回真实
 `content-type: text/html`。`webview2` 使用系统 WebView2 Runtime，由 Bun 内嵌
 TinyCC 编译无头文件 C shim；它刻意绕过 `WebView2Loader.dll`，发现 Edge 统一
 runtime 后直调未文档化的 `CreateWebViewEnvironmentWithOptionsInternal`。
-`webkitgtk` 需要 WebKit2GTK 4.1 栈和桌面 display。
+`webkitgtk` 需要 WebKit2GTK 4.1 栈和桌面 display。`wkwebview` 使用 macOS
+内置的 AppKit/WebKit framework；Bun 在运行时编译无头文件 C shim，再通过
+Objective-C runtime 驱动原生窗口，因此不需要另装浏览器或分发 native helper。
+`userDataDir` 在该 provider 中仅为 API 兼容而接受；公开 WKWebView API 不支持
+任意 profile 路径。
 
 返回的 `DesktopWindowHandle` 由 `provider` 和 `kind` 判别，提供 `ready`、
 `closed`、`lifecycle`、`capabilities`、`close()` 和完整 `attempts` 轨迹。
@@ -720,7 +726,8 @@ const releaseEvidence = getWindowProviderMatrix()
 | `webview2` | Windows arm64 | 未实现 | 当前实现要求 runtime TinyCC；测试的 compiled Bun runtime 不提供 |
 | `webkitgtk` | Linux x64 | 已实现 | WSLg 原生创建/导航/脚本/消息/关闭 smoke 已通过 |
 | `webkitgtk` | Linux arm64 | 已实现 | 未验证 |
-| `wkwebview` | macOS | 未实现 | 不暴露 provider ID |
+| `wkwebview` | macOS arm64 | 已实现 | 原生创建/导航/脚本/双向消息/关闭 smoke 已通过 |
+| `wkwebview` | macOS x64 | 已实现 | 未验证 |
 
 选择的 provider 无法观察真实窗口关闭时，`exitWithWindow: true` 会被拒绝。
 `chromium-pwa`、`system-browser` 和 `android-view-intent` 应设为 `false`。
@@ -855,7 +862,7 @@ https://github.com/oven-sh/bun/releases/download/bun-v<Bun.version>/<target>.zip
 | 功能 | Windows | Linux | macOS | Termux (Android) |
 | --- | --- | --- | --- | --- |
 | HTTP server / 生命周期 | 支持 | 支持 | 支持 | 支持 |
-| 浏览器 / 进程内 WebView 窗口 | 支持 / 支持 | 支持 / 支持（WebKitGTK） | 支持 / 不支持 | VIEW intent / 不支持 |
+| 浏览器 / 进程内 WebView 窗口 | 支持 / 支持 | 支持 / 支持（WebKitGTK） | 支持 / 支持（WKWebView） | VIEW intent / 不支持 |
 | 已安装 Chromium PWA | 支持 | 支持 | 支持 | 不支持 |
 | 安全单实例与参数转发 | 支持 | 支持 | 支持 | 支持 |
 | 单文件构建 / `.app` bundle | 单文件 EXE | 单文件 | `.app` bundle | n/a |
@@ -896,7 +903,7 @@ bun test
 bun run pack:check
 ```
 
-测试覆盖：真实 Windows/Linux 单文件构建与执行、macOS `.app` 交叉构建结构（Mach-O、Info.plist）、Windows PE metadata/manifest、真实 Chromium App Mode 进程、安全单实例转发、Linux XDG 注册往返、静态升级安装、GitHub release provider，以及 Windows 注册表 dry-run。
+测试覆盖：真实 Windows/Linux 单文件构建与执行、macOS `.app` 交叉构建结构（Mach-O、Info.plist）和 WKWebView 原生窗口 smoke、Windows PE metadata/manifest、真实 Chromium App Mode 进程、安全单实例转发、Linux XDG 注册往返、静态升级安装、GitHub release provider，以及 Windows 注册表 dry-run。
 
 ## License
 

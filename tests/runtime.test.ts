@@ -87,6 +87,7 @@ describe('desktop runtime', () => {
       expect(help.result).toContain('--smoke')
       expect(help.result).toContain('--provider <provider>')
       expect(help.result).toContain('webview2')
+      expect(help.result).toContain('wkwebview')
     }
 
     const shortHelp = await app.start(['-h'])
@@ -170,6 +171,11 @@ describe('desktop runtime', () => {
       entry.platform === 'win32' &&
       entry.arch === 'arm64' &&
       entry.implementation === 'not-implemented'
+    )).toBe(true)
+    expect(matrix.some((entry) =>
+      entry.provider === 'wkwebview' &&
+      entry.platform === 'darwin' &&
+      entry.implementation === 'implemented'
     )).toBe(true)
 
     const report = await inspectWindowProvider('android-view-intent')
@@ -968,6 +974,62 @@ describe('webview2 window provider', () => {
       expect(window.attempts).toEqual([{ provider: 'webview2', outcome: 'opened', diagnostics: [] }])
       const heading = await window.executeScript('document.querySelector("h1").textContent')
       expect(heading).toBe('webview-test')
+    } finally {
+      await session.stop()
+    }
+  }, 60_000)
+})
+
+describe('wkwebview window provider', () => {
+  it.skipIf(process.platform !== 'darwin')('opens a native macOS window with script and message bridges', async () => {
+    const { promise: pageMessage, resolve: resolvePageMessage } = Promise.withResolvers<unknown>()
+    const app = createDesktopApp({
+      id: `runtime-wkwebview-${process.pid}`,
+      server: {
+        port: 0,
+        stickyPort: false,
+        fetch: () => new Response(
+          '<html><body><h1>wkwebview-test</h1><script>window.chrome.webview.postMessage({source:"page"})</script></body></html>',
+          { headers: { 'content-type': 'text/html; charset=utf-8' } },
+        ),
+      },
+      window: {
+        provider: 'wkwebview',
+        path: '/',
+        width: 480,
+        height: 320,
+        title: 'WKWebView test',
+        onMessage: (message) => resolvePageMessage(message),
+      },
+      singleInstance: false,
+    })
+    const session = await app.start([])
+    expect(session.kind).toBe('primary')
+    if (session.kind !== 'primary') throw new Error('Expected a primary session')
+    try {
+      const window = session.window
+      if (!window || !('executeScript' in window)) throw new Error('Expected an embedded WKWebView window')
+      expect(window.provider).toBe('wkwebview')
+      await window.ready
+      expect(await pageMessage).toEqual({ source: 'page' })
+      expect(await window.executeScript('document.querySelector("h1").textContent')).toBe('wkwebview-test')
+      expect(await window.executeScript('Promise.resolve("async-result")')).toBe('async-result')
+      await expect(window.executeScript('throw new Error("script-failure")')).rejects.toThrow('script-failure')
+
+      const hostMessage = window.executeScript(
+        'new Promise(resolve => window.chrome.webview.addEventListener("message", event => resolve(event.data)))',
+      )
+      window.postMessage({ source: 'host' })
+      expect(await hostMessage).toEqual({ source: 'host' })
+      expect(window.lifecycle).toEqual({ ownership: 'window', windowCloseObservable: true })
+      expect(window.attempts).toEqual([{ provider: 'wkwebview', outcome: 'opened', diagnostics: [] }])
+
+      expect(window.close()).toBe(true)
+      await window.closed
+      const reopened = await session.launchWindow()
+      if (!reopened || !('executeScript' in reopened)) throw new Error('Expected a reopened WKWebView window')
+      await reopened.ready
+      expect(await reopened.executeScript('document.querySelector("h1").textContent')).toBe('wkwebview-test')
     } finally {
       await session.stop()
     }

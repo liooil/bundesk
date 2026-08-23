@@ -2,7 +2,7 @@
 
 > [中文](README.zh-CN.md) · **English**
 
-**Turn local web apps into desktop applications that start fast, build fast and are easy to debug — with Bun and the system browser.**
+**Turn local web apps into desktop applications that start fast, build fast and are easy to debug — with Bun and the system WebView/browser.**
 
 BunDesk is a desktop application framework for Bun — not just an EXE packaging script. The name is **Bun + Desktop**. The framework handles the HTTP server, browser windows, single instance, automatic updates, Windows file associations and Start Menu integration as one unit, while keeping the low-level composable API available.
 
@@ -36,7 +36,7 @@ Windows x64/ARM64 single-file EXEs can be produced on Linux CI. BunDesk download
 
 ### No bundled Chromium
 
-At runtime BunDesk prefers an installed Microsoft Edge, Google Chrome or Chromium and opens it as a standalone app window via `--app=<url>`. If none is installed, it launches Firefox with an isolated, tracked profile; the system URL opener is the final fallback. Every selection or failure is logged. The payoff is smaller releases, less renderer update burden and a shorter packaging pipeline.
+The application explicitly configures its window provider. It can use system WebViews—Windows WebView2, Linux WebKitGTK, or macOS WKWebView—or an Edge/Chrome/Chromium `--app=<url>` window, an isolated Firefox window, or the OS URL opener. The application also owns the fallback order, and every attempt or failure is logged. The payoff is smaller releases, less renderer update burden and a shorter packaging pipeline.
 
 ## Positioning vs Electron / Tauri
 
@@ -55,6 +55,7 @@ BunDesk suits tool-style desktop apps built around a local HTTP service plus a W
 
 - `createDesktopApp(...)` hosts the server, windows and lifecycle in one place;
 - low-level composable APIs such as `openDesktopWindow(...)`;
+- in-process Windows WebView2, Linux WebKitGTK, and macOS WKWebView windows;
 - standalone Edge/Chrome/Chromium `--app=<url>` windows (Brave included on macOS); Termux uses the Android VIEW intent;
 - loopback IPC single instance with a random 256-bit token;
 - secondary instances forward `argv`, `cwd` and PID to the primary instance's callback;
@@ -187,8 +188,8 @@ Its page is itself a fullstack route and links the live JSON endpoints:
 - **fullstack page** (HTML import — HMR in dev, AOT in the binary) plus a PWA
   manifest, service worker, and generated PNG icons
 - an app-owned **window provider policy**: `webview2` → Chromium → Firefox on
-  Windows, `webkitgtk` → Chromium → Firefox on Linux, Chromium → Firefox on
-  macOS, plus `--provider` pinning for every concrete provider
+  Windows, `webkitgtk` → Chromium → Firefox on Linux, and `wkwebview` →
+  Chromium → Firefox on macOS, plus `--provider` pinning for every concrete provider
 - **provider matrix and window-handle facts** served from the composable API
   (`/api/providers`)
 - **PWA installation**: `install-pwa`, `install-pwa --policy`,
@@ -776,19 +777,25 @@ Available concrete IDs:
 | --- | --- | --- |
 | `webview2` | Windows in-process WebView2 | Yes |
 | `webkitgtk` | Linux in-process WebKitGTK | Yes |
+| `wkwebview` | macOS in-process WKWebView | Yes |
 | `chromium-app` | Isolated Chromium `--app=<url>` process | Yes, for the managed process |
 | `chromium-pwa` | Installed Chromium app id | No; the process may only be the launcher |
 | `firefox-window` | Isolated Firefox profile/window process | Yes, for the managed process |
 | `system-browser` | OS URL opener | No |
 | `android-view-intent` | Termux Android VIEW intent | No; the process is only the dispatcher |
 
-`webview2` and `webkitgtk` expose `navigate`, `executeScript`, `postMessage`,
+`webview2`, `webkitgtk`, and `wkwebview` expose `navigate`, `executeScript`, `postMessage`,
 navigation readiness, and page-to-host messages. Pages must send a real
 `content-type: text/html` response. `webview2` uses the system WebView2 Runtime
 and a header-free C shim compiled by Bun's embedded TinyCC. It deliberately
 bypasses `WebView2Loader.dll`, discovers the Edge-unified runtime, and directly
 calls the undocumented `CreateWebViewEnvironmentWithOptionsInternal` export.
-`webkitgtk` requires the WebKit2GTK 4.1 stack and a desktop display.
+`webkitgtk` requires the WebKit2GTK 4.1 stack and a desktop display. `wkwebview`
+uses the AppKit and WebKit frameworks built into macOS. Bun compiles a
+header-free C shim at runtime, which drives the native window through the
+Objective-C runtime, so no browser installation or separately distributed
+native helper is required. `userDataDir` is accepted for API parity but public
+WKWebView APIs do not expose an arbitrary profile path.
 
 The returned `DesktopWindowHandle` is discriminated by `provider` and `kind`.
 It exposes `ready`, `closed`, `lifecycle`, `capabilities`, `close()`, and the
@@ -815,7 +822,8 @@ Current embedded-provider evidence:
 | `webview2` | Windows arm64 | Not implemented | Current implementation needs runtime TinyCC, unavailable in the tested compiled Bun runtime |
 | `webkitgtk` | Linux x64 | Implemented | Native WSLg create/navigation/script/message/close smoke passed |
 | `webkitgtk` | Linux arm64 | Implemented | Unverified |
-| `wkwebview` | macOS | Not implemented | No provider ID is exposed |
+| `wkwebview` | macOS arm64 | Implemented | Native create/navigation/script/bidirectional-message/close smoke passed |
+| `wkwebview` | macOS x64 | Implemented | Unverified |
 
 `exitWithWindow: true` is rejected when the selected provider cannot observe
 the actual window closing. Set it to `false` for `chromium-pwa`,
@@ -956,7 +964,7 @@ A custom mirror can be used via `runtime.downloadUrl`, and `runtime.sha256` pins
 | Feature | Windows | Linux | macOS | Termux (Android) |
 | --- | --- | --- | --- | --- |
 | HTTP server / lifecycle | Yes | Yes | Yes | Yes |
-| Browser / in-process WebView window | Yes / Yes | Yes / Yes (WebKitGTK) | Yes / No | VIEW intent / No |
+| Browser / in-process WebView window | Yes / Yes | Yes / Yes (WebKitGTK) | Yes / Yes (WKWebView) | VIEW intent / No |
 | Installed Chromium PWA | Yes | Yes | Yes | No |
 | Secure single instance and argument forwarding | Yes | Yes | Yes | Yes |
 | Single-file build / `.app` bundle | single-file EXE | single file | `.app` bundle | n/a |
@@ -997,7 +1005,7 @@ bun test
 bun run pack:check
 ```
 
-Test coverage: real Windows/Linux single-file builds and execution, macOS `.app` cross-compiled bundle structure (Mach-O, Info.plist), Windows PE metadata/manifest, real Chromium App Mode processes, secure single-instance forwarding, Linux XDG registration round trips, static update installation, the GitHub release provider, and Windows registry dry-runs.
+Test coverage: real Windows/Linux single-file builds and execution, macOS `.app` cross-compiled bundle structure (Mach-O, Info.plist) and native WKWebView smoke, Windows PE metadata/manifest, real Chromium App Mode processes, secure single-instance forwarding, Linux XDG registration round trips, static update installation, the GitHub release provider, and Windows registry dry-runs.
 
 ## License
 

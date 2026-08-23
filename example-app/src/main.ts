@@ -240,6 +240,15 @@ function platformWindowProviders(): Pick<DesktopWindowOptions, 'provider' | 'fal
       ],
     }
   }
+  if (process.platform === 'darwin') {
+    return {
+      provider: 'wkwebview',
+      fallback: [
+        { provider: 'chromium-app', on: ['unsupported', 'unavailable'] },
+        { provider: 'firefox-window', on: ['unsupported', 'unavailable'] },
+      ],
+    }
+  }
   return {
     provider: 'chromium-app',
     fallback: [{ provider: 'firefox-window', on: ['unsupported', 'unavailable'] }],
@@ -376,7 +385,7 @@ function playgroundFeatures(): PlaygroundFeature[] {
       name: 'App-owned window provider policy with explicit fallback',
       status: 'active',
       detail: `${recommendedWindow.provider} on ${process.platform}`,
-      command: '--provider webview2|webkitgtk|chromium-app|chromium-pwa|firefox-window|system-browser|android-view-intent',
+      command: '--provider webview2|webkitgtk|wkwebview|chromium-app|chromium-pwa|firefox-window|system-browser|android-view-intent',
     },
     {
       id: 'window-provider-facts',

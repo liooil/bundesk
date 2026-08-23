@@ -17,10 +17,12 @@ import { getAppDataDirectory } from './paths'
 import { isTermux } from './platform'
 import { createWebKitWindow, inspectWebKitAvailability, type WebKitWindow } from './webkit'
 import { createWebViewWindow, inspectWebView2Availability, type WebViewWindow } from './webview2'
+import { createWKWebViewWindow, inspectWKWebViewAvailability, type WKWebViewWindow } from './wkwebview'
 
 export const windowProviderIds = [
   'webview2',
   'webkitgtk',
+  'wkwebview',
   'chromium-app',
   'chromium-pwa',
   'firefox-window',
@@ -137,9 +139,9 @@ interface DesktopWindowHandleBase {
 }
 
 export interface EmbeddedDesktopWindowHandle extends DesktopWindowHandleBase {
-  provider: 'webview2' | 'webkitgtk'
+  provider: 'webview2' | 'webkitgtk' | 'wkwebview'
   kind: 'embedded'
-  native: WebViewWindow | WebKitWindow
+  native: WebViewWindow | WebKitWindow | WKWebViewWindow
   navigate(url: string): void
   postMessage(value: unknown): void
   executeScript(script: string): Promise<unknown>
@@ -222,6 +224,7 @@ const externalCapabilities = [
 const capabilitiesByProvider: Record<WindowProviderId, readonly WindowCapability[]> = {
   webview2: embeddedCapabilities,
   webkitgtk: embeddedCapabilities,
+  wkwebview: embeddedCapabilities,
   'chromium-app': processCapabilities,
   'chromium-pwa': launcherProcessCapabilities,
   'firefox-window': processCapabilities,
@@ -249,6 +252,15 @@ export const windowProviderMatrix: readonly WindowProviderMatrixEntry[] = [
   {
     provider: 'webkitgtk', platform: 'linux', arch: 'arm64', implementation: 'implemented',
     verification: 'unverified', runtimeRequirements: ['bun:ffi cc()', 'WebKit2GTK 4.1', 'desktop display'],
+  },
+  {
+    provider: 'wkwebview', platform: 'darwin', arch: 'arm64', implementation: 'implemented',
+    verification: 'verified', runtimeRequirements: ['bun:ffi cc()', 'macOS AppKit and WebKit frameworks'],
+    evidence: 'macOS 15 arm64: create, navigation, script, bidirectional messaging, and close smoke passed',
+  },
+  {
+    provider: 'wkwebview', platform: 'darwin', arch: 'x64', implementation: 'implemented',
+    verification: 'unverified', runtimeRequirements: ['bun:ffi cc()', 'macOS AppKit and WebKit frameworks'],
   },
   ...(['win32', 'linux', 'darwin'] as const).flatMap((platform) => [
     {
@@ -336,6 +348,13 @@ export async function inspectWindowProvider(
       return result.available
         ? available()
         : unavailable('BUNDESK_WEBKITGTK_RUNTIME_UNAVAILABLE', result.diagnostic ?? 'WebKitGTK is unavailable')
+    }
+    case 'wkwebview': {
+      if (process.platform !== 'darwin') return unsupported('BUNDESK_PROVIDER_PLATFORM_UNSUPPORTED', 'wkwebview is available only on macOS')
+      const result = await inspectWKWebViewAvailability()
+      return result.available
+        ? available()
+        : unavailable('BUNDESK_WKWEBVIEW_RUNTIME_UNAVAILABLE', result.diagnostic ?? 'WKWebView is unavailable')
     }
     case 'chromium-app': {
       if (isTermux()) return unsupported('BUNDESK_PROVIDER_PLATFORM_UNSUPPORTED', 'chromium-app is not available in Termux')
@@ -448,6 +467,16 @@ async function openProvider(
         onMessage: options.onMessage,
         onNavigateCompleted: callbacks.onNavigateCompleted,
       }))
+    case 'wkwebview':
+      return openEmbedded(provider, url, options, attempts, (callbacks) => createWKWebViewWindow({
+        url,
+        title: options.title,
+        width: options.width,
+        height: options.height,
+        userDataDir: options.userDataDir,
+        onMessage: options.onMessage,
+        onNavigateCompleted: callbacks.onNavigateCompleted,
+      }))
     case 'chromium-app':
       return processHandle(provider, url, await launchChromiumAppWindow({ ...options, appId: options.appId, url }))
     case 'chromium-pwa':
@@ -479,11 +508,11 @@ async function openProvider(
 }
 
 async function openEmbedded(
-  provider: 'webview2' | 'webkitgtk',
+  provider: 'webview2' | 'webkitgtk' | 'wkwebview',
   url: string,
   options: OpenWindowProviderOptions,
   attempts: readonly WindowProviderAttempt[],
-  create: (callbacks: { onNavigateCompleted(info: { success: boolean; errorStatus: number }): void }) => Promise<WebViewWindow | WebKitWindow>,
+  create: (callbacks: { onNavigateCompleted(info: { success: boolean; errorStatus: number }): void }) => Promise<WebViewWindow | WebKitWindow | WKWebViewWindow>,
 ): Promise<Omit<EmbeddedDesktopWindowHandle, 'attempts'>> {
   let resolveReady: ((value: WindowReadyResult) => void) | undefined
   let rejectReady: ((error: Error) => void) | undefined
