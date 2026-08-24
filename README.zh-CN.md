@@ -877,7 +877,7 @@ Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`
 
 ## Roadmap
 
-完整方案见 [应用迁移与性能基准计划](docs/migration-benchmark-plan.md)。当前只完成选型和实验设计，尚未开始迁移或采集性能数据。
+完整方案见 [应用迁移与性能基准计划](docs/migration-benchmark-plan.md)。首个 draw.io 原型及体积/压缩测量已经完成，结论见 [draw.io 迁移与发布体积实验结论](docs/drawio-migration-findings.md)。生产能力对齐、资源真实嵌入、Windows/macOS 签名产物和完整三平台验收仍未完成。
 
 已完成（本轮）：
 
@@ -885,10 +885,12 @@ Windows 控制台模式（`detached`/`hidden`/`inherit`）仅 Windows 有效；`
 - Linux XDG 文件关联、desktop entry、mimeapps 注册（`register`/`unregister`/`status`）；
 - Termux（Android）检测与 VIEW intent 窗口；
 - 服务注册（Windows Run key / systemd / launchd / termux-boot）、Windows 系统托盘（纯 Win32 FFI）与系统通知（WinRT toast 桥、notify-send、osascript、termux-notification）。
+- 独立的 draw.io 原型、Linux 构建/启动/内存测量，以及 Windows、Linux、macOS 三平台同款发行压缩投影。
 
 待评估：
 
-- 第一轮：draw.io Desktop（Electron）、NextChat（Tauri）、NeoHtop（Tauri）、LLMPET（Electron），覆盖 static-heavy、web-first、native-backend 和 small-but-real-backend（状态机 + 计量 + 权限）四类应用；
+- 完成 draw.io 的导出、确定性资源嵌入/签名、启动优化和三平台验收门槛；
+- 第一轮剩余应用：NextChat（Tauri）、NeoHtop（Tauri）、LLMPET（Electron），覆盖 web-first、native-backend 和 small-but-real-backend（状态机 + 计量 + 权限）三类应用；
 - 第二轮：MarkText（Electron）、Yaak（Tauri），扩大文件系统、编辑器、数据库、网络、插件和 secret/keychain 的兼容性边界；
 - macOS 签名/公证流水线在真实 Mac CI 上的落地；
 - **Hermes Agent + Poly**：评估以 [Poly](https://github.com/liooil/poly) 在同一进程中承载 Bun 与 RustPython，将 [Hermes Agent](https://github.com/NousResearch/hermes-agent) 的 Python agent/runtime 与 BunDesk 桌面壳整合；

@@ -979,7 +979,7 @@ The Windows console modes (`detached`/`hidden`/`inherit`) only apply on Windows;
 
 ## Roadmap
 
-See the [application migration and performance benchmark plan](docs/migration-benchmark-plan.md) for the full proposal. Only the technology selection and experimental design are done so far; migration and performance data collection have not started.
+See the [application migration and performance benchmark plan](docs/migration-benchmark-plan.md) for the full proposal. The first draw.io prototype and size/compression study are complete; see the [draw.io migration findings](docs/drawio-migration-findings.md). Production parity, embedded resources, signed Windows/macOS releases, and full cross-platform acceptance remain incomplete.
 
 Done (this round):
 
@@ -987,10 +987,12 @@ Done (this round):
 - Linux XDG file associations, desktop entries and mimeapps registration (`register`/`unregister`/`status`);
 - Termux (Android) detection and VIEW intent windows;
 - service registration (Windows Run key / systemd / launchd / termux-boot), the Windows system tray (pure Win32 FFI) and system notifications (WinRT toast bridge, notify-send, osascript, termux-notification).
+- a standalone draw.io prototype, Linux build/startup/memory measurements, and same-mechanism release compression projections for Windows, Linux, and macOS.
 
 To be evaluated:
 
-- Round 1: draw.io Desktop (Electron), NextChat (Tauri), NeoHtop (Tauri), LLMPET (Electron), covering static-heavy, web-first, native-backend and small-but-real-backend (state machine + metering + permission) app types;
+- completing draw.io's export, deterministic resource embedding/signing, startup optimization, and three-platform acceptance gates;
+- the remaining Round 1 apps: NextChat (Tauri), NeoHtop (Tauri), and LLMPET (Electron), covering web-first, native-backend, and small-but-real-backend (state machine + metering + permission) app types;
 - Round 2: MarkText (Electron), Yaak (Tauri), widening the compatibility boundary for file systems, editors, databases, networking, plugins and secret/keychain;
 - landing the macOS signing/notarization pipeline on real Mac CI;
 - **Hermes Agent + Poly**: evaluate hosting Bun and RustPython in the same process via [Poly](https://github.com/liooil/poly), integrating [Hermes Agent](https://github.com/NousResearch/hermes-agent)'s Python agent/runtime with the BunDesk desktop shell;

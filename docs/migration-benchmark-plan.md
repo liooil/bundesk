@@ -1,6 +1,6 @@
 # BunDesk 应用迁移与性能基准计划
 
-状态：**仅完成选型与实验设计，尚未执行迁移、原项目构建或性能测量。**
+状态：**选型与实验设计已完成；draw.io 原型、Linux 首轮基准和三平台同款压缩测量已完成，生产等价迁移尚未完成。**
 
 ## 目标
 
@@ -11,6 +11,12 @@
 3. BunDesk 单 binary 交付相对 Electron/Tauri 安装器及安装目录的真实体积和文件数量差异。
 
 不使用 hello-world 或框架自带 demo 作为结论依据。测试夹具可以使用本地服务，但迁移应用本身不得以 mock、空实现或静态截图替代真实功能。
+
+## 当前进度
+
+draw.io 已在独立的 `bundesk-drawio` 仓库完成首个可运行原型、Linux 构建/启动/内存基准、三平台安装占用投影，以及与官方发布包相同机制的压缩实验。框架侧结论和数据口径见 [draw.io 迁移与发布体积实验结论](drawio-migration-findings.md)。
+
+首轮结论为 **Conditional Go**：磁盘和下载收益显著，但资源真实嵌入、hidden export、Windows/macOS 签名产物、三平台功能验收及 Linux 启动优化仍未完成。因此 draw.io 可以展示迁移发现，但在满足结论文档中的下一阶段门槛前，不进入“完成迁移”或“性能胜出”排名。
 
 ## 候选应用
 
@@ -157,7 +163,7 @@ Electron 的 NSIS/MSI 安装器即使表面是一个文件，也必须测量安�
 ## 阶段顺序
 
 1. 固化通用测量器和 JSON schema；
-2. 完成 draw.io 原版与 BunDesk 迁移；
+2. draw.io 已完成原型和首轮量化；先完成 export、资源嵌入/签名与启动优化门槛，再决定是否推进生产等价迁移；
 3. 完成 NextChat 原版与 BunDesk 迁移；
 4. 完成 NeoHtop 原版与 BunDesk 迁移；
 5. 完成 LLMPET 原版与 BunDesk 迁移（Electron 桥层若获批，以其验证桥的边界）；
